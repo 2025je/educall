@@ -1,0 +1,27 @@
+services:
+  dial:
+    image: educall-android-builder
+    build: ./docker/android
+    environment:
+      APP_NAME: educall-dial
+    volumes:
+      - ./educall-dial:/source:ro
+      - ./artifacts/android:/output
+      - gradle_cache:/root/.gradle
+      - android_debug_keys:/root/.android
+
+  registro:
+    image: educall-android-builder
+    build: ./docker/android
+    environment:
+      APP_NAME: educall-registro
+      ATTENDANCE_SIGNING_PUBLIC_KEY: ${ATTENDANCE_SIGNING_PUBLIC_KEY:-}
+    volumes:
+      - ./educall-registro:/source:ro
+      - ./artifacts/android:/output
+      - gradle_cache:/root/.gradle
+      - android_debug_keys:/root/.android
+
+volumes:
+  gradle_cache:
+  android_debug_keys:

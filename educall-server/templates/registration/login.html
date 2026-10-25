@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Iniciar sesión · EduCall Server</title>
+  <link rel="stylesheet" href="/static/attendance/app.css">
+</head>
+<body class="login">
+  <main class="card">
+    <h1>EduCall Server</h1>
+    <p>Inicia sesión con tu cuenta autorizada.</p>
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Iniciar sesión</button>
+    </form>
+  </main>
+</body>
+</html>

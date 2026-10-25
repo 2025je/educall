@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+
+case "${APP_NAME:-}" in
+    educall-dial|educall-registro) ;;
+    *) echo "APP_NAME debe ser educall-dial o educall-registro." >&2; exit 1 ;;
+esac
+
+workdir="$(mktemp -d)"
+tar -C /source --exclude='./.gradle' --exclude='./build' \
+    --exclude='./app/build' --exclude='./local.properties' \
+    --exclude='./.idea' -cf "$workdir/source.tar" .
+tar -C "$workdir" -xf "$workdir/source.tar"
+cd "$workdir"
+
+set --
+if [ "$APP_NAME" = "educall-registro" ]; then
+    if [ -z "${ATTENDANCE_SIGNING_PUBLIC_KEY:-}" ]; then
+        echo "Configura ATTENDANCE_SIGNING_PUBLIC_KEY en .env o en el entorno (clave publica Ed25519 Base64)." >&2
+        exit 1
+    fi
+    set -- "-PattendancePublicKey=$ATTENDANCE_SIGNING_PUBLIC_KEY"
+fi
+
+gradle --no-daemon --console=plain --max-workers=2 \
+    -Dorg.gradle.java.installations.auto-download=false \
+    "$@" \
+    :app:assembleDebug
+
+mkdir -p /output
+cp app/build/outputs/apk/debug/app-debug.apk "/output/$APP_NAME-debug.apk"
+echo "APK generado: artifacts/android/$APP_NAME-debug.apk"

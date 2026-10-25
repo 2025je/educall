@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Operaciones · EduCall Server</title>
+  <link rel="stylesheet" href="/static/attendance/app.css">
+  <script src="/static/attendance/operator.js" defer></script>
+</head>
+<body>
+  <header>
+    <strong>EduCall Server</strong>
+    <span>Sesión: {{ request.user.get_username }}</span>
+    <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="secondary">Salir</button></form>
+  </header>
+  <main class="layout">
+    <section class="card">
+      <div class="section-heading"><h1>Cola de llamadas</h1><button id="next-call">Siguiente llamada</button></div>
+      <p id="call-message" role="status">Solicita una llamada cuando estés listo.</p>
+      <article id="active-call" hidden>
+        <h2 id="participant-name"></h2>
+        <p id="participant-details"></p>
+        <ol id="call-history"></ol>
+        <label for="call-notes">Notas</label>
+        <textarea id="call-notes" rows="3"></textarea>
+        <div class="actions">
+          <button data-outcome="no_answer" class="secondary">No contesta</button>
+          <button data-outcome="contacted" class="secondary">Contactado</button>
+          <button data-outcome="accepted">Aceptó</button>
+          <button data-outcome="declined" class="secondary">Rechazó</button>
+          <button data-outcome="do_not_contact" class="danger">No volver a contactar</button>
+          <button data-outcome="follow_up" class="secondary">Seguimiento</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Buscar participante</h2>
+      <form id="search-form">
+        <label for="search-query">Nombre o teléfono</label>
+        <div class="inline"><input id="search-query" minlength="2" required><button>Buscar</button></div>
+      </form>
+      <ul id="search-results" class="results"></ul>
+      <div class="campaign-builder">
+        <h3>Campaña</h3>
+        <label for="campaign-name">Nombre</label>
+        <input id="campaign-name" maxlength="120" value="Seguimiento de participantes">
+        <p id="campaign-count">0 destinatarios</p>
+        <ul id="campaign-selection" class="results"></ul>
+        <button id="prepare-campaign" disabled>Preparar campaña</button>
+      </div>
+      <div id="campaign-results" hidden>
+        <h3>Mensajes preparados</h3>
+        <ul id="campaign-message-list" class="results"></ul>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Preparar WhatsApp</h2>
+      <p>El enlace abre WhatsApp; el envío siempre lo confirma el operador.</p>
+      <label for="template-id">Plantilla</label>
+      <select id="template-id">
+        <option value="">Selecciona una plantilla</option>
+        {% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+      </select>
+      <input type="hidden" id="message-participant-id">
+      <button id="prepare-message" disabled>Previsualizar mensaje</button>
+      <div id="message-preview" hidden>
+        <pre id="message-content"></pre>
+        <a id="whatsapp-link" target="_blank" rel="noopener noreferrer">Abrir WhatsApp</a>
+        <a id="qr-download" hidden download>Descargar QR para adjuntarlo manualmente</a>
+        <div class="actions">
+          <button data-message-status="sent">Confirmo que se envió</button>
+          <button data-message-status="failed" class="secondary">Fallido</button>
+          <button data-message-status="cancelled" class="secondary">Cancelar</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

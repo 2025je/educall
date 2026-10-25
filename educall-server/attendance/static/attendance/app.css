@@ -1,0 +1,29 @@
+:root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #17212b; background: #f3f6f8; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { display: flex; align-items: center; gap: 1rem; padding: .8rem max(1rem, calc((100% - 1100px) / 2)); background: #123b57; color: white; }
+header strong { margin-right: auto; font-size: 1.2rem; }
+header form { margin: 0; }
+.layout { width: min(1100px, calc(100% - 2rem)); margin: 1.5rem auto; display: grid; gap: 1rem; }
+.card { background: white; border-radius: .7rem; box-shadow: 0 2px 12px #123b5712; padding: 1.25rem; }
+.section-heading, .inline { display: flex; align-items: center; gap: .7rem; }
+.section-heading { justify-content: space-between; }
+h1, h2 { margin: 0 0 .65rem; }
+h1 { font-size: 1.45rem; }
+h2 { font-size: 1.15rem; }
+label { display: block; font-weight: 600; margin: .65rem 0 .25rem; }
+input, select, textarea { width: 100%; border: 1px solid #aab8c2; border-radius: .35rem; padding: .6rem; font: inherit; }
+button, .actions a { border: 0; border-radius: .35rem; color: white; background: #126ca0; padding: .6rem .85rem; cursor: pointer; font: inherit; text-decoration: none; }
+button:disabled { opacity: .55; cursor: wait; }
+.secondary { background: #536d7c; }
+.danger { background: #a83737; }
+.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+.results { list-style: none; padding: 0; }
+.results li { padding: .55rem 0; border-bottom: 1px solid #e5eaed; display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+.results select { max-width: 190px; }
+.campaign-builder { border-top: 1px solid #e5eaed; margin-top: 1rem; padding-top: 1rem; }
+pre { white-space: pre-wrap; background: #f3f6f8; padding: .8rem; border-radius: .35rem; }
+#toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: #17212b; color: white; border-radius: .35rem; padding: .7rem 1rem; display: none; max-width: calc(100% - 2rem); }
+.login { min-height: 100vh; display: grid; place-items: center; }
+.login .card { width: min(420px, calc(100% - 2rem)); }
+@media (max-width: 600px) { header { flex-wrap: wrap; } .section-heading { align-items: flex-start; flex-direction: column; } .inline { align-items: stretch; flex-direction: column; } .results li { align-items: flex-start; flex-direction: column; } }

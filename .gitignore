@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.sqlite3
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+build/
+.gradle/
+local.properties
+*.jks
+*.keystore
+*.attendance
+*.attendance-results
+staticfiles/
+artifacts/
