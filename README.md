@@ -106,6 +106,47 @@ El contenedor usa una copia del código: no hay recarga automática ni montaje d
 
 Los códigos, intentos de llamada, asistencias e historiales generados se consultan desde el administrador. Cambia la reunión de origen mediante el formulario del participante; se conserva el historial y se invalidan los códigos anteriores.
 
+### Grupos de usuarios: funciones y limitaciones
+
+Los grupos predeterminados se configuran en [attendance/signals.py](./educall-server/attendance/signals.py). La tabla describe sus permisos **sin permisos individuales adicionales ni otros grupos**; los controles de cada operación están en [attendance/views.py](./educall-server/attendance/views.py).
+
+| Función | `ADMINISTRADOR` | `REGISTRAR` | `OPERADOR` |
+|---|---|---|---|
+| Entrar a la pantalla web de operaciones (`/`) | Sí | No; devuelve 403 | Sí |
+| Consultar participantes y reuniones activas mediante la API | Sí | Sí | Sí |
+| Crear y modificar participantes | Sí | Sí | No |
+| Crear tareas de llamada | Sí | Sí | No |
+| Crear o modificar reuniones y plantillas de WhatsApp | Sí | No | No |
+| Solicitar la siguiente llamada mediante la API | Sí, con perfil de operador | Sí, con perfil de operador; **no puede registrar el resultado** | Sí, con perfil de operador |
+| Registrar resultados de llamadas y contactos entrantes | Sí | No | Sí |
+| Consultar intentos de llamada | Sí | No | Sí |
+| Consultar plantillas activas y preparar mensajes/campañas mediante la API | Sí | Sí | Sí |
+| Actualizar el estado manual de sus propios mensajes | Sí | Sí | Sí |
+| Descargar el QR de un código vigente | Sí | No | Sí |
+| Recibir eventos en tiempo real del servidor | Sí | No | Sí |
+| Exportar paquetes de asistencia e importar resultados offline | Sí | No | No |
+| Consultar reportes de asistencia y resolver conflictos | Sí | No | No |
+| Gestionar usuarios, grupos y permisos | Sí | No | No |
+
+**`ADMINISTRADOR`: administración completa del servidor.** Recibe todos los permisos disponibles al ejecutar las migraciones, incluidos los de usuarios y grupos. Debe asignarse únicamente a personas de confianza: no es un rol administrativo restringido y permite gestionar privilegios. No equivale automáticamente a marcar la cuenta como superusuario o personal.
+
+**`REGISTRAR`: preparación de participantes y tareas.** El nombre del grupo no significa que pueda importar asistencias o resolver conflictos. Sus permisos predeterminados son `add_participant`, `change_participant`, `view_participant`, `add_calltask`, `view_calltask` y `view_meeting`. Actualmente no tiene una pantalla web propia y no puede entrar a la pantalla de operadores. Aunque la API le permite solicitar llamadas si tiene perfil, no tiene `add_callattempt` para registrar sus resultados; no se recomienda usar este grupo por sí solo para atender la cola.
+
+**`OPERADOR`: atención de llamadas e invitaciones.** Sus permisos predeterminados son `view_participant`, `view_calltask`, `add_callattempt`, `view_callattempt`, `view_meeting`, `view_realtimeevent` y `view_attendancecode`. Puede registrar resultados, notas y solicitudes de no volver a contactar a través del flujo de llamadas, pero no editar libremente las fichas de participantes ni crear tareas, reuniones, plantillas o cuentas.
+
+#### Reglas comunes y acceso a las interfaces
+
+- **Cuenta activa:** para iniciar sesión, la cuenta debe estar activa (`is_active`). Una cuenta sin grupos ni permisos adicionales puede autenticarse, pero no tiene acceso funcional a las operaciones protegidas.
+- **Grupos acumulables:** una cuenta puede pertenecer a varios grupos; sus permisos se suman a los permisos individuales. Por ejemplo, `REGISTRAR` + `OPERADOR` combina preparación y atención de llamadas.
+- **Acceso al administrador Django:** entrar a `/admin/` requiere una cuenta activa con `is_staff` (opción «Es personal»), además de los permisos de cada modelo. Pertenecer a `ADMINISTRADOR` **no activa `is_staff`**; marcar `is_staff` tampoco concede por sí solo permisos de administración. Para crear participantes o tareas desde esa interfaz, un `REGISTRAR` también necesita `is_staff`.
+- **Superusuario:** no es un grupo. Una cuenta activa con `is_superuser` dispone de todos los permisos y puede entrar a la pantalla de operaciones sin pertenecer a los grupos anteriores. Para acceder a `/admin/` sigue necesitando `is_staff`.
+- **Perfil de operador:** solicitar llamadas y emitir códigos requiere un `OperatorProfile` con iniciales únicas de dos letras mayúsculas, incluso para administradores y superusuarios. Tener un grupo o marcar `is_staff` no crea ese perfil.
+- **Límites de las llamadas:** registrar el resultado de una tarea exige que esté asignada al usuario actual y que la asignación no haya vencido; ser administrador no omite ese control.
+- **Límites de WhatsApp:** la API autoriza la preparación de mensajes y campañas con `view_participant`, por lo que también lo permite a `REGISTRAR`. Solo se puede contactar a participantes que hayan autorizado el contacto y no estén marcados como «No volver a contactar». Cada usuario solo puede actualizar el estado de sus propios mensajes, incluso si es administrador. No hay envío automático ni confirmación de entrega.
+- **Permisos no equivalen a pantallas:** algunas funciones de la tabla solo se ofrecen mediante la API o el administrador Django. Actualmente la web de operaciones no incluye formularios para crear usuarios, participantes, reuniones o tareas. EduCall Dial usa los permisos de la API: poder iniciar sesión no garantiza poder realizar todas las acciones que muestra.
+- **Registro offline:** el grupo `REGISTRAR` del servidor no concede ni restringe por sí mismo el uso de EduCall Registro. Esa app trabaja con paquetes firmados y archivos locales; exportar paquetes e importar resultados en el servidor requiere los permisos indicados en la tabla.
+- **Migraciones:** al ejecutar `migrate`, se crean los tres grupos y se vuelve a establecer su conjunto de permisos predeterminado. Las modificaciones manuales a los permisos de esos grupos pueden sobrescribirse; para permisos adicionales persistentes, usa grupos propios o permisos individuales.
+
 ### Reglas principales
 
 - Las llamadas se asignan transaccionalmente, con vencimiento de diez minutos. Si no contestan, vuelven a estar disponibles después de quince minutos.
