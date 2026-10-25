@@ -5,7 +5,11 @@ from django.core.exceptions import ImproperlyConfigured
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "local-development-only-change-me")
 DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
-ALLOWED_HOSTS = [host for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
+]
 if not DEBUG and SECRET_KEY == "local-development-only-change-me":
     raise ImproperlyConfigured("Configura DJANGO_SECRET_KEY antes del despliegue.")
 
@@ -90,9 +94,15 @@ CSRF_COOKIE_HTTPONLY = True
 SESSION_COOKIE_HTTPONLY = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+SECURE_COOKIES = not DEBUG or os.environ.get("DJANGO_SECURE_COOKIES") == "1"
+SESSION_COOKIE_SECURE = SECURE_COOKIES
+CSRF_COOKIE_SECURE = SECURE_COOKIES
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "0" if DEBUG else "1") == "1"
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https")
+    if os.environ.get("DJANGO_TRUST_X_FORWARDED_PROTO") == "1"
+    else None
+)
 
 ATTENDANCE_SIGNING_PRIVATE_KEY = os.environ.get("ATTENDANCE_SIGNING_PRIVATE_KEY", "")
 ATTENDANCE_SIGNING_PUBLIC_KEY = os.environ.get("ATTENDANCE_SIGNING_PUBLIC_KEY", "")

@@ -25,7 +25,7 @@ Esta configuración sirve para **desarrollo y pruebas locales**: usa PostgreSQL 
 
 - Docker Desktop instalado y en ejecución, con contenedores Linux y Docker Compose v2.
 - Git para descargar el repositorio.
-- Puerto local `8080` disponible.
+- Puerto local configurado en `EDUCALL_PORT` (`8081` en el ejemplo) disponible.
 
 ```powershell
 git clone https://github.com/2025je/educall.git
@@ -44,25 +44,11 @@ Copia el ejemplo sin sobrescribir un archivo de configuración existente:
 Copy-Item .\.env.example .\.env
 ```
 
-Edita el archivo `.env` de la raíz y completa al menos:
-
-```dotenv
-DJANGO_SECRET_KEY=una-clave-larga-aleatoria-propia
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-DJANGO_TIME_ZONE=America/Mexico_City
-EDUCALL_PORT=8080
-POSTGRES_DB=educall
-POSTGRES_USER=educall
-POSTGRES_PASSWORD=una-contrasena-larga-aleatoria-propia
-ATTENDANCE_SIGNING_PRIVATE_KEY=
-ATTENDANCE_SIGNING_PUBLIC_KEY=
-```
-
-No uses los textos de ejemplo como secretos reales. No compartas ni subas `.env` al repositorio. Las claves de firma pueden quedar vacías para probar llamadas y administración; son necesarias para exportar paquetes de asistencia.
+Edita el único archivo `.env` de la raíz. El ejemplo ya contiene las variables que usan Docker Compose, EduCall Server y las compilaciones Android; cambia el puerto o las claves cuando sea necesario. No uses los textos dummy como secretos reales. No compartas ni subas `.env` al repositorio. Las claves de firma pueden quedar vacías para probar llamadas y administración; son necesarias para exportar paquetes de asistencia.
 
 Compose carga `.env` e impone `POSTGRES_HOST=db`, `DJANGO_DEBUG=1` y el puerto interno `5432`. PostgreSQL no publica un puerto al equipo.
 
-Si otro proyecto (por ejemplo, EduTrack) ya usa el puerto 8080, cambia `EDUCALL_PORT` a un puerto libre, como `8081`, y sustituye el puerto en las URL de esta guía. No es necesario detener los contenedores del otro proyecto.
+Si otro proyecto ya usa el puerto configurado (por ejemplo, EduTrack usa `8080`), cambia `EDUCALL_PORT` en `.env` a un puerto libre y sustituye el puerto en las URL de esta guía. No es necesario detener los contenedores del otro proyecto.
 
 ### 3. Construir e iniciar
 
@@ -82,9 +68,9 @@ docker compose exec web python manage.py createsuperuser
 
 Abre:
 
-- Sitio de operadores: <http://localhost:8080/>.
-- Inicio de sesión: <http://localhost:8080/accounts/login/>.
-- Administración: <http://localhost:8080/admin/>.
+- Sitio de operadores: <http://localhost:8081/>.
+- Inicio de sesión: <http://localhost:8081/accounts/login/>.
+- Administración: <http://localhost:8081/admin/>.
 
 ### 5. Comandos habituales
 
@@ -231,6 +217,65 @@ La app permite iniciar sesión con una cuenta del servidor, solicitar una llamad
 
 **Conexión:** introduce una URL `https://` con certificado válido y accesible desde el dispositivo. El servidor local Docker de esta guía solo ofrece HTTP y, por tanto, **no basta para conectar EduCall Dial**. Necesitas publicar el servidor detrás de HTTPS; no desactives la validación de certificados. `localhost` en un teléfono es el teléfono, no tu computadora.
 
+#### Probar EduCall Dial en una red local
+
+Para pruebas sin dominio público, el proyecto incluye un proxy HTTPS con una CA local. Esta opción es solo para desarrollo: el APK debug confiará en certificados instalados por el usuario; las versiones release seguirán confiando únicamente en las CA del sistema.
+
+1. En el `.env` de la raíz, configura los nombres/IP que usarás. Para un emulador Android, `10.0.2.2` apunta a la computadora. Para un teléfono físico, usa la IP LAN de la computadora (por ejemplo, `192.168.1.25`) y asígnala en el router para que no cambie:
+
+   ```dotenv
+   EDUCALL_LOCAL_HTTPS_HOSTS=10.0.2.2, 192.168.1.25
+   EDUCALL_LOCAL_HTTPS_DEFAULT_SNI=192.168.1.25
+   EDUCALL_HTTPS_BIND_IP=192.168.1.25
+   ```
+
+   En un teléfono, usa la misma IP LAN para el host, `EDUCALL_LOCAL_HTTPS_DEFAULT_SNI` y `EDUCALL_HTTPS_BIND_IP`, y permite conexiones entrantes al puerto TCP 443 en el firewall de Windows. Para usar solo el emulador, basta con `EDUCALL_LOCAL_HTTPS_HOSTS=10.0.2.2`; puedes omitir las otras dos variables.
+
+2. Desde la raíz del repositorio, inicia el proxy junto con el servidor. Reconstruye EduCall Dial para incluir la confianza de certificados de desarrollo:
+
+   ```powershell
+   docker compose -f compose.yaml -f compose.local-https.yaml up --build -d
+   docker compose -f compose.android.yaml run --rm dial
+   ```
+
+   El segundo comando compila el APK en `artifacts/android/educall-dial-debug.apk`. Instálalo en el dispositivo o emulador.
+
+3. Exporta el certificado raíz de Caddy:
+
+   ```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\export-local-ca.ps1
+   ```
+
+El archivo se guarda como `educall-local-root.crt` en la raíz. `-ExecutionPolicy Bypass` solo aplica a este proceso de PowerShell y no cambia la política del equipo. El script solo exporta el certificado público, nunca la clave privada de la CA. Si el archivo ya existe, se niega a sobrescribirlo; usa `-Force` únicamente si quieres reemplazarlo.
+
+4. Copia `educall-local-root.crt` al teléfono (por ejemplo, por USB) e instálalo en Android como certificado de CA desde los ajustes de seguridad del dispositivo. Luego, en EduCall Dial, introduce `https://10.0.2.2` en el emulador o `https://192.168.1.25` en el teléfono. El teléfono y la computadora deben estar en la misma red Wi-Fi.
+
+La CA instalada permite confiar en certificados locales en el APK debug; no instales una CA que no controles. Para uso fuera de la red local, configura un dominio con certificado público válido y sigue las instrucciones de despliegue; no distribuyas el APK debug.
+
+#### Permitir todos los dispositivos de la red en AVG
+
+No es necesario registrar cada teléfono ni añadir sus IP a `DJANGO_ALLOWED_HOSTS`: esa variable contiene la dirección del servidor, no las de los clientes.
+
+En AVG, abre **Configuración → Protección básica → Cortafuegos mejorado → Ver reglas del Cortafuegos → Reglas de red** (o **Reglas de paquetes**, según la versión) y edita la regla de EduCall:
+
+| Campo | Valor |
+|---|---|
+| Acción | Permitir |
+| Protocolo | TCP |
+| Dirección de conexión | Entrada |
+| IP remota | `192.168.1.1-192.168.1.254`, para una red `192.168.1.0/24` |
+| Puerto local | `443` |
+| Puerto remoto | Vacío / Todos |
+| Perfil | El de la red local actual |
+
+Comprueba la subred de tu router antes de usar ese rango y adáptalo si es diferente. Mantén AVG activado; no permitas todos los puertos de Docker ni todas las direcciones de Internet. Si hay una regla personalizada de bloqueo anterior, revisa su prioridad. Cada teléfono debe instalar la CA local y conectarse a la misma URL HTTPS del servidor; sus usuarios siguen necesitando una cuenta y los permisos correspondientes.
+
+#### Cierre de sesión desde EduCall Dial
+
+Django rota la cookie CSRF al autenticar al usuario. La app utiliza el valor vigente de esa cookie en cada operación POST, incluido el cierre de sesión; no se debe reutilizar el token del formulario anterior al inicio de sesión. Si tenías una versión anterior del APK que devolvía HTTP 403 al salir, recompila e instala EduCall Dial con `docker compose -f compose.android.yaml run --rm dial`.
+
+En otra PC, inicia Caddy y vuelve a ejecutar `.\scripts\export-local-ca.ps1`: el volumen local de Docker tendrá su propia CA, distinta de la anterior. Instala el certificado exportado de esa PC en el teléfono. Si conservas y trasladas explícitamente el volumen `caddy_data`, la CA existente se conserva y no es necesario instalar otra.
+
 ### EduCall Registro
 
 En [gradle.properties](./educall-registro/gradle.properties) añade la clave pública obtenida del servidor, sin comillas:
@@ -294,12 +339,23 @@ Set-Location .\educall-server
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+if (-not (Test-Path ..\.env)) {
+    Copy-Item ..\.env.example ..\.env
+}
+Get-Content ..\.env | ForEach-Object {
+    if ($_ -match '^\s*([^#=]+)=(.*)$') {
+        [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2], 'Process')
+    }
+}
+$env:DJANGO_DEBUG = "1"
+$env:POSTGRES_DB = ""
+$env:SQLITE_PATH = (Join-Path (Get-Location) "db.sqlite3")
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Abre <http://127.0.0.1:8000/>. Por defecto usa SQLite y `DEBUG=1`, solo para desarrollo. Django no carga automáticamente los archivos `.env` al ejecutarse directamente: establece las variables en PowerShell o en el entorno del proceso. El ejemplo para ese modo está en [educall-server/.env.example](./educall-server/.env.example).
+Abre <http://127.0.0.1:8000/>. Django no carga archivos `.env` por sí solo; los comandos anteriores importan el único `.env` de la raíz y fuerzan SQLite para este modo local.
 
 ## Producción y HTTPS
 

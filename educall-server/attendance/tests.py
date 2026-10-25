@@ -278,6 +278,49 @@ class AttendanceServicesTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(client.session.get("_auth_user_id"))
 
+    def test_mobile_logout_requires_the_csrf_cookie_rotated_at_login(self):
+        from django.test import Client
+
+        self.user.set_password("mobile-session-test-password")
+        self.user.save()
+        client = Client(enforce_csrf_checks=True)
+        client.get("/accounts/login/", secure=True)
+        initial_token = client.cookies["csrftoken"].value
+        response = client.post(
+            "/accounts/login/",
+            {
+                "username": self.user.username,
+                "password": "mobile-session-test-password",
+                "csrfmiddlewaretoken": initial_token,
+            },
+            secure=True,
+            HTTP_REFERER="https://testserver/accounts/login/",
+        )
+        self.assertEqual(response.status_code, 302)
+        rotated_token = client.cookies["csrftoken"].value
+        self.assertNotEqual(initial_token, rotated_token)
+        denied = client.post(
+            "/api/v1/mobile/logout/",
+            data="{}",
+            content_type="application/json",
+            secure=True,
+            HTTP_REFERER="https://testserver/",
+            HTTP_X_CSRFTOKEN=initial_token,
+        )
+        self.assertEqual(denied.status_code, 403)
+        self.assertTrue(client.session.get("_auth_user_id"))
+        response = client.post(
+            "/api/v1/mobile/logout/",
+            data="{}",
+            content_type="application/json",
+            secure=True,
+            HTTP_REFERER="https://testserver/",
+            HTTP_X_CSRFTOKEN=rotated_token,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        self.assertFalse(client.session.get("_auth_user_id"))
+
     def test_package_is_signed_and_contains_only_signed_manifest_hashes(self):
         private = Ed25519PrivateKey.generate()
         raw_private = private.private_bytes(

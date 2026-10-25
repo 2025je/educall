@@ -1,0 +1,8 @@
+{
+    default_sni {$EDUCALL_LOCAL_HTTPS_DEFAULT_SNI:10.0.2.2}
+}
+
+{$EDUCALL_LOCAL_HTTPS_HOSTS} {
+    tls internal
+    reverse_proxy web:8000
+}

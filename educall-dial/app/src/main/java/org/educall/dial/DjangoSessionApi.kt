@@ -4,6 +4,7 @@ import android.net.Uri
 import java.net.CookieManager
 import java.net.CookiePolicy
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.net.URLEncoder
 import org.json.JSONObject
@@ -11,7 +12,6 @@ import org.json.JSONObject
 class DjangoSessionApi(baseUrl: String) {
     private val baseUrl = baseUrl.trimEnd('/')
     private val cookieManager: CookieManager
-    private var csrfToken: String? = null
 
     init {
         val uri = Uri.parse(this.baseUrl)
@@ -39,7 +39,6 @@ class DjangoSessionApi(baseUrl: String) {
         val token = Regex("""name=["']csrfmiddlewaretoken["']\s+value=["']([^"']+)["']""")
             .find(page)?.groupValues?.get(1)
             ?: throw IllegalStateException("El servidor no entregó el token CSRF del inicio de sesión.")
-        csrfToken = token
         val fields = listOf(
             "csrfmiddlewaretoken" to token,
             "username" to username,
@@ -75,10 +74,16 @@ class DjangoSessionApi(baseUrl: String) {
     fun logout() {
         post("/api/v1/mobile/logout/", JSONObject())
         cookieManager.cookieStore.removeAll()
-        csrfToken = null
     }
 
     private fun request(path: String, method: String, body: String?): JSONObject {
+        val csrfToken = if (method == "POST") {
+            cookieManager.cookieStore.get(URI(baseUrl))
+                .firstOrNull { it.name == "csrftoken" && !it.hasExpired() }?.value
+                ?: throw IllegalStateException("No hay un token CSRF vigente. Inicia sesión de nuevo.")
+        } else {
+            null
+        }
         val connection = connection(path)
         try {
             connection.requestMethod = method
