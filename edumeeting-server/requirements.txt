@@ -1,6 +1,6 @@
 Django>=5.2,<5.3
 djangorestframework>=3.16,<3.17
-cryptography>=44,<47
+cryptography>=50.0.2,<51
 psycopg[binary]>=3.2,<4
 qrcode[pil]>=8,<9
 channels[daphne]>=4.2,<5
