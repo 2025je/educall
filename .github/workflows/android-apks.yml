@@ -46,10 +46,10 @@ jobs:
       VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-dev.{0}', github.run_number) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
       - name: Validate attendance public key
         if: matrix.app == 'asistencia'
@@ -75,10 +75,10 @@ jobs:
         run: echo "VERSION_NAME=${VERSION_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Android builder
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./docker/android
           load: true
@@ -95,7 +95,7 @@ jobs:
         run: docker compose -f compose.android.yaml run --rm --pull never ${{ matrix.app }}
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: edumeeting-${{ matrix.app }}-${{ env.BUILD_TYPE }}
           path: artifacts/android/edumeeting-${{ matrix.app }}-${{ env.BUILD_TYPE }}.apk
@@ -111,7 +111,7 @@ jobs:
       contents: write
     steps:
       - name: Download APKs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: edumeeting-*-release
           path: apks
