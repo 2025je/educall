@@ -34,6 +34,8 @@ urlpatterns = [
     path("codes/<uuid:code_id>/qr/", views.AttendanceQrView.as_view(), name="attendance-qr"),
     path("attendance/import/", views.ImportResultsView.as_view(), name="import-results"),
     path("attendance/conflicts/<int:conflict_id>/resolve/", views.ResolveConflictView.as_view(), name="resolve-conflict"),
+    path("meetings/<uuid:meeting_id>/conflicts/", views.MeetingConflictListView.as_view(), name="meeting-conflicts"),
+    path("meetings/<uuid:meeting_id>/attendance-pin/", views.MeetingAttendancePinView.as_view(), name="meeting-attendance-pin"),
     path("attendance/stream/", views.EventStreamView.as_view(), name="event-stream"),
     path("attendance/report/<uuid:meeting_id>/", views.MeetingReportView.as_view(), name="meeting-report"),
 ]

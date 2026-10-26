@@ -49,6 +49,7 @@ REQUESTS = {
     "MessageStatusView": s.MessageStatusSerializer,
     "ResolveConflictView": s.ResolveConflictSerializer,
     "ImportResultsView": obj("ResultsUpload", file=serializers.FileField()),
+    "MeetingAttendancePinView": obj("AttendancePinUpdate", pin=text(min_length=6, max_length=8)),
 }
 RESPONSES = {
     "SessionContextView": obj(
@@ -77,8 +78,19 @@ RESPONSES = {
     "MessageStatusView": obj("MessageStatusResult", ok=boolean(), status=text()),
     "ExportPackageView": OpenApiTypes.BINARY,
     "AttendanceQrView": OpenApiTypes.BINARY,
-    "ImportResultsView": obj("ImportReport", export_id=text(), created=array(text()), duplicates=array(text()), conflicts=array(text())),
+    "ImportResultsView": obj(
+        "ImportReport", export_id=text(), created=array(text()), duplicates=array(text()), conflicts=array(text()),
+        by_operator=serializers.DictField(child=integer()),
+    ),
+    "MeetingAttendancePinView": obj("AttendancePinStatus", configured=boolean()),
     "ResolveConflictView": obj("ResolvedConflict", ok=boolean(), conflict_id=integer(), resolved_record_id=text()),
+    "MeetingConflictListView": obj("PendingConflicts", conflicts=array(obj(
+        "PendingConflict", id=integer(), participant_name=text(),
+        records=array(obj(
+            "ConflictRecord", id=serializers.UUIDField(), recorded_at=serializers.DateTimeField(), method=text(),
+            device_id=text(), operator_label=text(allow_blank=True), exception_note=text(allow_blank=True),
+        )),
+    ))),
     "EventStreamView": OpenApiTypes.STR,
     "MeetingReportView": obj(
         "MeetingReport", meeting_id=text(), meeting_name=text(), invited=integer(), confirmed=integer(),

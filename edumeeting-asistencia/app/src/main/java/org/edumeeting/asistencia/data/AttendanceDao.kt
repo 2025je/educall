@@ -17,6 +17,7 @@ data class AttendanceDisplay(
     val recordedAt: String,
     val exportedAt: String?,
     val exceptionNote: String,
+    val operatorLabel: String,
 )
 
 @Dao
@@ -51,7 +52,7 @@ interface AttendanceDao {
     @Insert
     suspend fun insertAttendance(attendance: LocalAttendance)
 
-    @Query("SELECT LocalAttendance.id, LocalAttendance.participantId, LocalAttendance.participantName, LocalAttendance.originMeetingId, LocalAttendance.originMeetingName, LocalAttendance.effectiveMeetingId, LocalAttendance.method, LocalAttendance.recordedAt, LocalAttendance.exportedAt, LocalAttendance.exceptionNote FROM LocalAttendance WHERE LocalAttendance.effectiveMeetingId = :meetingId ORDER BY LocalAttendance.recordedAt")
+    @Query("SELECT LocalAttendance.id, LocalAttendance.participantId, LocalAttendance.participantName, LocalAttendance.originMeetingId, LocalAttendance.originMeetingName, LocalAttendance.effectiveMeetingId, LocalAttendance.method, LocalAttendance.recordedAt, LocalAttendance.exportedAt, LocalAttendance.exceptionNote, LocalAttendance.operatorLabel FROM LocalAttendance WHERE LocalAttendance.effectiveMeetingId = :meetingId ORDER BY LocalAttendance.recordedAt")
     fun attendanceForMeeting(meetingId: String): Flow<List<AttendanceDisplay>>
 
     @Query("SELECT * FROM LocalAttendance WHERE effectiveMeetingId = :meetingId ORDER BY recordedAt")

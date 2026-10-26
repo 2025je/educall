@@ -59,7 +59,8 @@ class AttendanceServicesTests(TestCase):
         self.owner = get_user_model().objects.create_user("meeting_owner")
         self.owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.meeting.administrator = self.owner
-        self.meeting.save(update_fields=("administrator",))
+        self.meeting.attendance_pin_hash = "pbkdf2_sha256$1$salt$Ha5h"
+        self.meeting.save(update_fields=("administrator", "attendance_pin_hash"))
         self.user.groups.add(Group.objects.get(name="OPERADOR"))
         self.meeting.operators.add(self.user)
         self.participant = Participant.objects.create(
@@ -455,6 +456,7 @@ class AttendanceServicesTests(TestCase):
             starts_at=timezone.now(),
             allow_cross_meeting_attendance=True,
             administrator=self.owner,
+            attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
         )
         code = issue_attendance_code(self.participant, self.meeting, self.user)
         private = Ed25519PrivateKey.generate()

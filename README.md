@@ -548,14 +548,19 @@ Se verificó la compilación Docker de ambas apps y la firma de sus APK debug. A
 
 Estas operaciones las realiza el **administrador de la reunión** (el usuario del grupo ADMINISTRADOR que la creó) o un superusuario. En la web: **Gestionar reuniones → Asistencia offline** de cada reunión propia. Otros administradores, registradores y operadores reciben 403.
 
-1. En **Asistencia offline**, pulsa **Exportar asistencia** y descarga el paquete firmado (disponible 24 h). También existe `GET /api/v1/meetings/{meeting_id}/package/`.
-2. Transfiere el archivo `.attendance` por un canal controlado e impórtalo mediante el selector de documentos de Asistencia.
-3. La app verifica firma Ed25519, hashes y estructura antes de guardar los datos en Room.
+En la app **EduMeeting Llamadas**, el administrador encuentra lo mismo en **Asignaciones y estadísticas → Asistencia offline** (con su reunión propia activa): definir el PIN, exportar el paquete `.attendance`, importar y combinar `.attendance-results` y resolver conflictos.
+
+La app Asistencia nunca se conecta al servidor y no usa cuentas: cada reunión tiene **un único PIN** (6 a 8 dígitos) que comparten las personas que toman asistencia. Cada persona escribe su nombre y el PIN en la app; ese nombre queda en cada registro para que el administrador sepa quién lo hizo.
+
+1. En **Asistencia offline → PIN de la app Asistencia**, define el PIN de la reunión. Sin PIN no se puede exportar el paquete. El servidor guarda solo un hash PBKDF2 y lo incluye en el paquete firmado.
+2. Pulsa **Exportar asistencia** y descarga el paquete firmado (disponible 24 h). También existe `GET /api/v1/meetings/{meeting_id}/package/`. Si cambias el PIN, exporta un paquete nuevo: los anteriores conservan el PIN anterior.
+3. Transfiere el archivo `.attendance` por un canal controlado e impórtalo en cada teléfono mediante el selector de documentos de Asistencia. La app verifica firma Ed25519, hashes y estructura antes de guardar los datos en Room. Los paquetes exportados antes de existir el PIN se rechazan: vuelve a exportarlos.
 4. Selecciona y confirma explícitamente la reunión de trabajo. La selección persiste y no cambia por escanear, buscar o importar.
-5. Registra por QR o búsqueda de nombre, teléfono o código. La cámara es opcional; se evitan duplicados locales por participante y reunión efectiva.
-6. Exporta los resultados `.attendance-results`. Las asistencias permanecen en el dispositivo.
-7. En **Asistencia offline → Importar resultados**, sube el archivo (o usa `POST /api/v1/attendance/import/`, campo multipart `file`). Reimportar el mismo archivo es seguro; un archivo de otra reunión se rechaza.
-8. En **Resolver conflictos**, compara los registros duplicados (hora, método, dispositivo, operador), elige cuál se conserva y escribe el motivo. El otro queda rechazado y ambos permanecen en el historial.
+5. En **Identificación**, cada persona escribe su nombre y el PIN. Tras 5 intentos fallidos la app bloquea el PIN durante 60 s. **Cerrar sesión** permite que otra persona use el mismo teléfono.
+6. Registra por QR o búsqueda de nombre, teléfono o código. La cámara es opcional; se evitan duplicados locales por participante y reunión efectiva.
+7. Exporta los resultados `.attendance-results` de cada teléfono. Las asistencias permanecen en el dispositivo.
+8. En **Importar y combinar resultados**, elige a la vez los archivos de todos los teléfonos (hasta 20; o usa `POST /api/v1/attendance/import/` una vez por archivo, campo multipart `file`). Cada archivo se importa por separado, se informa cuántos registros aportó cada persona y la web muestra la tabla **Registros por persona**. Reimportar un archivo es seguro; un archivo de otra reunión se rechaza sin afectar a los demás.
+9. En **Resolver conflictos**, compara los registros duplicados (hora, método, dispositivo y quién registró), elige cuál se conserva y escribe el motivo. El otro queda rechazado y ambos permanecen en el historial.
 
 ### Formatos y límites
 
@@ -564,7 +569,8 @@ Estas operaciones las realiza el **administrador de la reunión** (el usuario de
 - Los paquetes contienen datos personales en texto plano: protege su transferencia y el acceso al dispositivo.
 - Por defecto no se permite asistencia cruzada entre reuniones. Habilitarla amplía los datos exportados; si exporta un administrador, solo se incluyen participantes de reuniones que él administra.
 - Un dispositivo offline no conoce cambios posteriores a la exportación. El servidor vuelve a validar los registros y deja los casos correspondientes en revisión.
-- Los resultados Android conservan UUID estables para importación idempotente, pero no tienen firma de dispositivo: no prueban criptográficamente quién registró cada asistencia.
+- Los resultados Android conservan UUID estables para importación idempotente, pero no tienen firma de dispositivo: no prueban criptográficamente quién registró cada asistencia. El nombre lo escribe la persona y el PIN es compartido.
+- El PIN controla el uso de la app, no es una protección fuerte: quien obtenga el paquete podría probar PIN de 6 dígitos por fuerza bruta fuera del teléfono. Usa 8 dígitos y protege el paquete.
 - No hay sincronización automática de dispositivos, envío automático de WhatsApp, confirmación de entrega ni adjunto automático del QR. El operador confirma el envío; la imagen QR se adjunta manualmente cuando corresponda.
 
 ## Ejecutar Django sin Docker
@@ -638,10 +644,12 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET/POST /meetings/members/` | Consultar candidatos/asignaciones o guardar listas de IDs `registrars` y `operators`; solo el administrador de la reunión. |
 | `GET /meetings/statistics/` | Estadísticas de la reunión activa y actividad por usuario; solo su administrador. |
 | `POST /participants/` | Registrar `full_name`, `phone`, `contact_authorized` y crear tarea en la reunión activa; solo registradores asignados. |
-| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado; solo el administrador de la reunión o un superusuario. |
+| `GET/PUT /meetings/{meeting_id}/attendance-pin/` | Consultar si hay PIN (`configured`) o definirlo (`pin`, 6 a 8 dígitos; también acepta POST); solo el administrador de la reunión o un superusuario. |
+| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado (requiere PIN definido); solo el administrador de la reunión o un superusuario. |
 | `GET /codes/{code_id}/qr/` | Descargar el QR PNG de un código vigente. |
-| `POST /attendance/import/` | Importar resultados offline de reuniones propias (administrador o superusuario). |
+| `POST /attendance/import/` | Importar un archivo de resultados offline de reuniones propias (administrador o superusuario); `by_operator` indica cuántos registros aportó cada persona. |
 | `GET /attendance/report/{meeting_id}/` | Consultar totales de la reunión. |
+| `GET /meetings/{meeting_id}/conflicts/` | Listar conflictos pendientes de una reunión propia (administrador o superusuario). |
 | `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión o un superusuario. |
 | `GET /attendance/stream/` | Recibir eventos SSE publicados después del commit. |
 

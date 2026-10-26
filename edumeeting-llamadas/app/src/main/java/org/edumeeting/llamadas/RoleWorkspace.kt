@@ -30,6 +30,7 @@ internal class RoleWorkspaceState {
     var registrars by mutableStateOf<Set<Int>>(emptySet())
     var operators by mutableStateOf<Set<Int>>(emptySet())
     var statistics by mutableStateOf<JSONObject?>(null)
+    val offline = OfflineAttendanceState()
 }
 
 @Composable
@@ -127,6 +128,8 @@ internal fun RoleWorkspace(
                     }
                 }
             }
+            HorizontalDivider()
+            OfflineAttendanceSection(api, busy, runRequest, onNotice, offline)
         }
         if (canRegister) {
             Text("Una persona, una conexión", style = MaterialTheme.typography.headlineLarge)

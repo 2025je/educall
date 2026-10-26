@@ -1,14 +1,14 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import redirect, render
-from django.views.decorators.http import require_GET, require_POST
+from django.views import View
 
 from .access import accessible_meetings, active_meeting, has_role, require_meeting_role
 from .forms import MeetingMembersForm, ParticipantRegistrationForm
-from .models import AuditEvent, CallAttempt, CallTask, Meeting, Participant
+from .models import AuditEvent, CallAttempt, CallTask, Meeting, MessageTemplate, Participant
 
 
 def capabilities(user, meeting):
@@ -42,19 +42,19 @@ def workspace_context(request):
     }
 
 
-@login_required
-@require_GET
-def home(request):
-    context = workspace_context(request)
-    context["participant_form"] = ParticipantRegistrationForm()
-    if context["can_manage"]:
-        context["members_form"] = MeetingMembersForm(instance=context["active_meeting"])
-        context["statistics"] = meeting_statistics(context["active_meeting"])
-    if context["can_operate"]:
-        from .models import MessageTemplate
-        context["templates"] = MessageTemplate.objects.filter(active=True).order_by("name")
-        return render(request, "attendance/operator.html", context)
-    return render(request, "attendance/workspace.html", context)
+class HomeView(LoginRequiredMixin, View):
+    http_method_names = ["get"]
+
+    def get(self, request):
+        context = workspace_context(request)
+        context["participant_form"] = ParticipantRegistrationForm()
+        if context["can_manage"]:
+            context["members_form"] = MeetingMembersForm(instance=context["active_meeting"])
+            context["statistics"] = meeting_statistics(context["active_meeting"])
+        if context["can_operate"]:
+            context["templates"] = MessageTemplate.objects.filter(active=True).order_by("name")
+            return render(request, "attendance/operator.html", context)
+        return render(request, "attendance/workspace.html", context)
 
 
 def select_active_meeting(request, meeting_id):
@@ -63,11 +63,12 @@ def select_active_meeting(request, meeting_id):
     request.session["active_meeting"] = str(meeting_id)
 
 
-@login_required
-@require_POST
-def select_meeting(request):
-    select_active_meeting(request, request.POST.get("meeting_id"))
-    return redirect("operator")
+class SelectMeetingView(LoginRequiredMixin, View):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        select_active_meeting(request, request.POST.get("meeting_id"))
+        return redirect("operator")
 
 
 def meeting_statistics(meeting):
@@ -143,30 +144,32 @@ def _render_workspace_error(request, meeting, status=400, **forms):
     return render(request, "attendance/workspace.html", context, status=status)
 
 
-@login_required
-@require_POST
-def members(request):
-    meeting = active_meeting(request, "ADMINISTRADOR")
-    form = MeetingMembersForm(request.POST, instance=meeting)
-    if not form.is_valid():
-        return _render_workspace_error(request, meeting, members_form=form)
-    update_members(
-        meeting,
-        [user.pk for user in form.cleaned_data["registrars"]],
-        [user.pk for user in form.cleaned_data["operators"]],
-        request.user,
-    )
-    messages.success(request, "Usuarios asignados a la reunión.")
-    return redirect("operator")
+class MembersView(LoginRequiredMixin, View):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        meeting = active_meeting(request, "ADMINISTRADOR")
+        form = MeetingMembersForm(request.POST, instance=meeting)
+        if not form.is_valid():
+            return _render_workspace_error(request, meeting, members_form=form)
+        update_members(
+            meeting,
+            [user.pk for user in form.cleaned_data["registrars"]],
+            [user.pk for user in form.cleaned_data["operators"]],
+            request.user,
+        )
+        messages.success(request, "Usuarios asignados a la reunión.")
+        return redirect("operator")
 
 
-@login_required
-@require_POST
-def register_participant(request):
-    meeting = active_meeting(request, "REGISTRAR")
-    form = ParticipantRegistrationForm(request.POST)
-    if not form.is_valid():
-        return _render_workspace_error(request, meeting, participant_form=form)
-    create_participant(meeting, form.cleaned_data, request.user)
-    messages.success(request, "Persona registrada en la cola de la reunión activa.")
-    return redirect("operator")
+class RegisterParticipantView(LoginRequiredMixin, View):
+    http_method_names = ["post"]
+
+    def post(self, request):
+        meeting = active_meeting(request, "REGISTRAR")
+        form = ParticipantRegistrationForm(request.POST)
+        if not form.is_valid():
+            return _render_workspace_error(request, meeting, participant_form=form)
+        create_participant(meeting, form.cleaned_data, request.user)
+        messages.success(request, "Persona registrada en la cola de la reunión activa.")
+        return redirect("operator")

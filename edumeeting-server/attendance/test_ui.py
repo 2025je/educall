@@ -7,6 +7,47 @@ from django.utils import timezone
 from .models import Meeting
 
 
+class ClassBasedViewAccessTests(TestCase):
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user("admin")
+        self.admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
+        self.meeting = Meeting.objects.create(number=9, name="CBV", starts_at=timezone.now(), administrator=self.admin)
+
+    def test_anonymous_users_are_redirected_to_login(self):
+        for url in (
+            reverse("operator"), reverse("user-list"), reverse("meeting-management"),
+            reverse("meeting-edit", args=[self.meeting.pk]), reverse("offline-attendance", args=[self.meeting.pk]),
+        ):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 302)
+                self.assertTrue(response["Location"].startswith(reverse("login")))
+
+    def test_methods_are_restricted(self):
+        self.client.force_login(self.admin)
+        for method, url in (
+            ("post", reverse("operator")),
+            ("get", reverse("meeting-toggle", args=[self.meeting.pk])),
+            ("get", reverse("offline-pin", args=[self.meeting.pk])),
+            ("put", reverse("meeting-management")),
+        ):
+            with self.subTest(method=method, url=url):
+                self.assertEqual(getattr(self.client, method)(url).status_code, 405)
+
+    def test_permission_failures_return_403(self):
+        registrar = get_user_model().objects.create_user("registrar")
+        registrar.groups.add(        Group.objects.get(name="REGISTRAR"))
+        self.client.force_login(registrar)
+        self.assertEqual(self.client.get(reverse("meeting-management")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("user-list")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("meeting-edit", args=[self.meeting.pk])).status_code, 403)
+
+    def test_meeting_edit_renders_and_saves_owned_meeting(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("meeting-edit", args=[self.meeting.pk]))
+        self.assertContains(response, "CBV")
+        self.assertEqual(response.context["meeting"], self.meeting)
+
 class MaterialLayoutTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_user("admin")

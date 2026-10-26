@@ -45,6 +45,8 @@ class Meeting(models.Model):
         limit_choices_to={"groups__name": "OPERADOR", "is_active": True},
     )
     allow_cross_meeting_attendance = models.BooleanField(default=False)
+    # Hash PBKDF2 del PIN que exige la app Asistencia; viaja firmado en el paquete offline.
+    attendance_pin_hash = models.CharField(max_length=160, blank=True, editable=False)
     next_code_sequence = models.PositiveIntegerField(default=1)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_meetings"

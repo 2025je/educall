@@ -81,6 +81,10 @@ object AttendancePackageImporter {
         UUID.fromString(packageId)
         UUID.fromString(meetingId)
         require(meetingId == manifest.getValue("meeting_id").jsonPrimitive.content)
+        val pinHash = meetingData["attendance_pin_hash"]?.takeUnless { it.toString() == "null" }?.jsonPrimitive?.content.orEmpty()
+        require(AttendancePin.isValidHash(pinHash)) {
+            "El paquete no incluye el PIN de la reunión. Define el PIN en el servidor y exporta un paquete nuevo."
+        }
         val meeting = LocalMeeting(
             id = meetingId,
             number = meetingData.getValue("number").jsonPrimitive.content.toInt(),
@@ -92,6 +96,7 @@ object AttendancePackageImporter {
             confirmedCount = meetingData.getValue("confirmed_count").jsonPrimitive.content.toInt(),
             packageId = packageId,
             packageExportedAt = manifest.getValue("exported_at").jsonPrimitive.content,
+            pinHash = pinHash,
         )
         val participants = json.parseToJsonElement(files.getValue("participants.json").decodeToString())
             .jsonArray.map { element ->

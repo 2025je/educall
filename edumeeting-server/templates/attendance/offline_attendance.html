@@ -5,41 +5,66 @@
 {% block nav_offline %}{% if active_meeting.pk == meeting.pk %} md-nav__link--active{% endif %}{% endblock %}
 {% block tab_meetings %} md-tabs__link--active{% endblock %}
 {% block breadcrumbs %} <span>›</span> <a href="{% url 'meeting-management' %}">Gestionar reuniones</a> <span>›</span> <span>Asistencia offline</span>{% endblock %}
-{% block toc %}<li><a class="md-nav__link" href="#exportar">Exportar paquete</a></li><li><a class="md-nav__link" href="#importar">Importar resultados</a></li><li><a class="md-nav__link" href="#conflictos">Conflictos</a></li>{% endblock %}
+{% block toc %}<li><a class="md-nav__link" href="#pin">PIN de la app</a></li><li><a class="md-nav__link" href="#exportar">Exportar paquete</a></li><li><a class="md-nav__link" href="#importar">Importar y combinar</a></li><li><a class="md-nav__link" href="#conflictos">Conflictos</a></li>{% endblock %}
 {% block content %}
 <h1>Asistencia offline · {{ meeting.number }} {{ meeting.name }}</h1>
 <p>Registros de esta reunión: <span class="md-chip md-chip--ok">{{ totals.accepted }} aceptados</span> <span class="md-chip">{{ totals.review }} en revisión</span> <span class="md-chip md-chip--muted">{{ totals.rejected }} rechazados</span></p>
 
 <section class="md-section">
-  <h2 id="exportar">1. Exportar paquete para la app Asistencia</h2>
-  <p>Genera un paquete firmado con los participantes y códigos válidos. Cárgalo en el teléfono para registrar asistencia sin conexión.</p>
+  <h2 id="pin">1. PIN de la app Asistencia</h2>
+  <p>Quien use la app Asistencia debe escribir su nombre y este PIN antes de registrar. El nombre acompaña cada asistencia y así sabrás quién la registró. El PIN viaja protegido dentro del paquete firmado y se verifica en el teléfono, sin conexión.</p>
+  {% if pin_configured %}<div class="admonition success"><p>La reunión ya tiene PIN. Puedes cambiarlo; los paquetes exportados antes seguirán usando el PIN anterior.</p></div>{% else %}<div class="admonition warning"><p>Define el PIN antes de exportar el paquete.</p></div>{% endif %}
+  <form method="post" action="{% url 'offline-pin' meeting.pk %}" class="md-form">
+    {% csrf_token %}
+    <p><label for="attendance-pin">{% if pin_configured %}Nuevo PIN{% else %}PIN{% endif %} (6 a 8 dígitos)</label><input id="attendance-pin" type="password" name="pin" inputmode="numeric" pattern="[0-9]{6,8}" minlength="6" maxlength="8" autocomplete="new-password" required></p>
+    <p><label for="attendance-pin-confirmation">Repite el PIN</label><input id="attendance-pin-confirmation" type="password" name="pin_confirmation" inputmode="numeric" pattern="[0-9]{6,8}" minlength="6" maxlength="8" autocomplete="new-password" required></p>
+    <button type="submit" class="md-button">Guardar PIN</button>
+  </form>
+</section>
+
+<section class="md-section">
+  <h2 id="exportar">2. Exportar paquete para la app Asistencia</h2>
+  <p>Genera un paquete firmado con los participantes, los códigos válidos y el PIN. Cárgalo en cada teléfono que registrará asistencia sin conexión.</p>
   {% if cross_meeting %}<div class="admonition info"><p>Esta reunión acepta asistentes de otras reuniones; el paquete solo incluirá participantes de las reuniones que tú administras.</p></div>{% endif %}
   <div class="actions">
     {% csrf_token %}
-    <button type="button" class="md-button" data-export-url="{% url 'package-export-create' meeting.pk %}">Exportar asistencia</button>
+    <button type="button" class="md-button" data-export-url="{% url 'package-export-create' meeting.pk %}"{% if not pin_configured %} disabled title="Define primero el PIN"{% endif %}>Exportar asistencia</button>
     <span data-export-status role="status" aria-live="polite"></span>
   </div>
 </section>
 
 <section class="md-section">
-  <h2 id="importar">2. Importar resultados del dispositivo</h2>
-  <p>Sube el archivo de resultados exportado por la app Asistencia. Reimportar el mismo archivo es seguro: los registros ya importados se omiten.</p>
+  <h2 id="importar">3. Importar y combinar resultados</h2>
+  <p>Sube los archivos de resultados de todos los teléfonos a la vez (hasta {{ max_result_files }}). Se combinan en la reunión; reimportar un archivo es seguro y, si una persona fue registrada en dos teléfonos, aparece como conflicto.</p>
   <form method="post" action="{% url 'offline-import' meeting.pk %}" enctype="multipart/form-data" class="md-form">
     {% csrf_token %}
-    <p><label for="results-file">Archivo de resultados (.attendance-results)</label><input id="results-file" type="file" name="file" accept=".attendance-results,.zip,application/vnd.edumeeting.attendance-results+zip,application/zip" required></p>
+    <p><label for="results-file">Archivos de resultados (.attendance-results)</label><input id="results-file" type="file" name="file" multiple accept=".attendance-results,.zip,application/vnd.edumeeting.attendance-results+zip,application/zip" required></p>
     <button type="submit" class="md-button">Importar resultados</button>
   </form>
+  <h3 id="personas">Registros por persona</h3>
+  {% if operators %}
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>Registrado por</th><th>Total</th><th>Aceptados</th><th>En revisión</th><th>Rechazados</th><th>Dispositivos</th></tr></thead>
+    <tbody>
+    {% for row in operators %}
+    <tr><td>{{ row.operator_label|default:"Sin identificar" }}</td><td>{{ row.total }}</td><td>{{ row.accepted }}</td><td>{{ row.review }}</td><td>{{ row.rejected }}</td><td>{{ row.devices }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p>Aún no se importaron asistencias.</p>
+  {% endif %}
 </section>
 
 <section class="md-section">
-  <h2 id="conflictos">3. Resolver conflictos</h2>
+  <h2 id="conflictos">4. Resolver conflictos</h2>
   <p>Un conflicto aparece cuando el mismo participante se registró más de una vez (por ejemplo, en dos dispositivos). Elige el registro que se conserva; el otro queda rechazado y ambos se guardan en el historial.</p>
   {% for conflict in pending_conflicts %}
   <form method="post" action="{% url 'offline-resolve' meeting.pk conflict.pk %}" class="md-form md-card">
     {% csrf_token %}
     <h3>{{ conflict.first_record.participant_name_snapshot|default:conflict.first_record.participant.full_name }}</h3>
     <div class="md-typeset__table"><table>
-      <thead><tr><th>Conservar</th><th>Hora registrada</th><th>Método</th><th>Dispositivo</th><th>Operador</th><th>Importado por</th><th>Notas</th></tr></thead>
+      <thead><tr><th>Conservar</th><th>Hora registrada</th><th>Método</th><th>Dispositivo</th><th>Registrado por</th><th>Importado por</th><th>Notas</th></tr></thead>
       <tbody>
       {% for record in conflict.records %}
       <tr>

@@ -35,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -104,7 +105,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -133,7 +136,9 @@ import org.edumeeting.asistencia.data.LocalParticipant
 
 class MainActivity : ComponentActivity() {
     private val database by lazy {
-        Room.databaseBuilder(applicationContext, AttendanceDatabase::class.java, "attendance.db").build()
+        Room.databaseBuilder(applicationContext, AttendanceDatabase::class.java, "attendance.db")
+            .addMigrations(AttendanceDatabase.MIGRATION_1_2)
+            .build()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,7 +156,7 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
     Inicio("Inicio", Icons.Default.Home),
     Importar("Importar paquete", Icons.Default.Add),
     Reunion("Reunión", Icons.Default.DateRange),
-    Operador("Operador", Icons.Default.Person),
+    Operador("Identificación", Icons.Default.Lock),
     Registrar("Registrar asistencia", Icons.Default.CheckCircle),
     Exportar("Exportar", Icons.Default.Share),
 }
@@ -170,6 +175,8 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
     val selectedId by repository.currentMeetingId.collectAsState(initial = null)
     val operator by repository.operatorLabel.collectAsState(initial = "")
     val selectedMeeting = meetings.firstOrNull { it.id == selectedId }
+    val shift by repository.shift.collectAsState(initial = null)
+    val activeOperator = shift?.takeIf { it.meetingId == selectedMeeting?.id }?.operator
     var pendingMeeting by remember { mutableStateOf<LocalMeeting?>(null) }
     var selectedParticipant by remember { mutableStateOf<Pair<LocalParticipant, String>?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -187,8 +194,27 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
         screen = target
         scope.launch { drawerState.close() }
     }
-    var operatorInput by remember { mutableStateOf("") }
-    LaunchedEffect(operator) { operatorInput = operator }
+    var nameInput by rememberSaveable { mutableStateOf("") }
+    var pinInput by remember { mutableStateOf("") }
+    var verifyingPin by remember { mutableStateOf(false) }
+    LaunchedEffect(operator) { if (nameInput.isBlank()) nameInput = operator }
+    fun startShift() {
+        val meeting = selectedMeeting ?: return
+        if (verifyingPin) return
+        verifyingPin = true
+        scope.launch {
+            try {
+                repository.startShift(meeting.id, nameInput, pinInput)
+                showNotice("Identificación correcta. Las asistencias quedarán registradas a tu nombre.", AdmonitionKind.Success)
+                screen = AppScreen.Registrar
+            } catch (error: Exception) {
+                showNotice(error.message ?: "No se pudo verificar el PIN.", AdmonitionKind.Danger)
+            } finally {
+                pinInput = ""
+                verifyingPin = false
+            }
+        }
+    }
     LaunchedEffect(screen) { if (screen != AppScreen.Registrar) scanning = false }
     val currentIdFlow = repository.currentMeetingId
     val searchResults by remember(query) {
@@ -231,6 +257,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
         if (uri != null && selectedMeeting != null) scope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    repository.requireShift(selectedMeeting.id)
                     val records = repository.attendanceForExport(selectedMeeting.id)
                     AttendanceResultsExporter.write(
                         context.contentResolver, uri, selectedMeeting, records
@@ -323,7 +350,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                 }
             },
             floatingActionButton = {
-                if (screen == AppScreen.Registrar && selectedMeeting != null) {
+                if (screen == AppScreen.Registrar && selectedMeeting != null && activeOperator != null) {
                     ExtendedFloatingActionButton(
                         onClick = ::toggleScanner,
                         icon = { Icon(if (scanning) Icons.Default.Close else Icons.Default.Search, contentDescription = null) },
@@ -345,7 +372,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                     participants = packageRosterCount,
                     registered = attendance.size,
                     pending = attendance.count { it.exportedAt == null },
-                    operator = operator,
+                    operator = activeOperator,
                     onNavigate = ::navigate,
                     onImport = ::launchImport,
                 )
@@ -363,25 +390,29 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                     onPick = { meeting -> if (meeting.id != selectedMeeting?.id) pendingMeeting = meeting },
                     onImport = ::launchImport,
                 )
-                AppScreen.Operador -> OperatorScreen(
+                AppScreen.Operador -> IdentityScreen(
                     modifier = modifier,
-                    operator = operator,
-                    value = operatorInput,
-                    onValueChange = { operatorInput = it },
-                    onSave = {
+                    meeting = selectedMeeting,
+                    operator = activeOperator,
+                    name = nameInput,
+                    onNameChange = { nameInput = it },
+                    pin = pinInput,
+                    onPinChange = { value -> pinInput = value.filter(Char::isDigit).take(8) },
+                    verifying = verifyingPin,
+                    onStart = ::startShift,
+                    onEnd = {
                         scope.launch {
-                            try {
-                                repository.setOperatorLabel(operatorInput)
-                                showNotice("Identificador de operador guardado en este dispositivo.", AdmonitionKind.Success)
-                            } catch (error: Exception) {
-                                showNotice(error.message ?: "No se pudo guardar el identificador.", AdmonitionKind.Danger)
-                            }
+                            repository.endShift()
+                            showNotice("Sesión cerrada. Otra persona puede identificarse.", AdmonitionKind.Info)
                         }
                     },
+                    onChooseMeeting = { screen = AppScreen.Reunion },
                 )
                 AppScreen.Registrar -> RegisterScreen(
                     modifier = modifier,
                     meeting = selectedMeeting,
+                    operator = activeOperator,
+                    onIdentify = { screen = AppScreen.Operador },
                     registered = attendance.size,
                     query = query,
                     onQueryChange = { query = it },
@@ -403,6 +434,8 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                 AppScreen.Exportar -> ExportScreen(
                     modifier = modifier,
                     meeting = selectedMeeting,
+                    operator = activeOperator,
+                    onIdentify = { screen = AppScreen.Operador },
                     meetings = meetings,
                     attendance = attendance,
                     packageRosterCount = packageRosterCount,
@@ -420,7 +453,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
             onDismissRequest = { pendingMeeting = null },
             icon = { Icon(Icons.Default.DateRange, contentDescription = null) },
             title = { Text("Cambiar reunión actual") },
-            text = { Text("¿Confirmas trabajar en «${meeting.name}»? Las asistencias existentes no se modificarán.") },
+            text = { Text("¿Confirmas trabajar en «${meeting.name}»? Las asistencias existentes no se modificarán. Para registrar deberás escribir tu nombre y el PIN de esa reunión.") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -465,6 +498,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                         if (selectedMeeting?.allowCrossMeetingAttendance == true) AdmonitionKind.Warning else AdmonitionKind.Danger,
                     )
                     Text("Método: $method", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Registra: ${activeOperator ?: "sin identificar"}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
@@ -638,7 +672,7 @@ private fun HomeScreen(
     participants: Int,
     registered: Int,
     pending: Int,
-    operator: String,
+    operator: String?,
     onNavigate: (AppScreen) -> Unit,
     onImport: () -> Unit,
 ) {
@@ -647,7 +681,7 @@ private fun HomeScreen(
         QuickAction(AppScreen.Reunion, "Elige y confirma la reunión de trabajo.", "Elegir"),
         QuickAction(AppScreen.Importar, "Carga un paquete firmado con reuniones y participantes.", "Importar"),
         QuickAction(AppScreen.Exportar, "Genera el archivo de resultados de la reunión.", "Exportar"),
-        QuickAction(AppScreen.Operador, "Identifica a quien registra en este dispositivo.", "Configurar"),
+        QuickAction(AppScreen.Operador, "Escribe tu nombre y el PIN de la reunión para registrar.", "Identificarme"),
     )
     ScreenList(modifier) {
         item {
@@ -735,7 +769,7 @@ private fun HomeScreen(
                     modifier = Modifier.size(18.dp),
                 )
                 Text(
-                    if (operator.isBlank()) "Operador sin identificar" else "Operador: $operator",
+                    if (operator == null) "Nadie identificado: escribe tu nombre y el PIN para registrar" else "Registrando como: $operator",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -889,47 +923,103 @@ private fun MeetingItem(meeting: LocalMeeting, selected: Boolean, onClick: () ->
 }
 
 @Composable
-private fun OperatorScreen(
+private fun IdentityScreen(
     modifier: Modifier,
-    operator: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    onSave: () -> Unit,
+    meeting: LocalMeeting?,
+    operator: String?,
+    name: String,
+    onNameChange: (String) -> Unit,
+    pin: String,
+    onPinChange: (String) -> Unit,
+    verifying: Boolean,
+    onStart: () -> Unit,
+    onEnd: () -> Unit,
+    onChooseMeeting: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     ScreenList(modifier) {
+        if (meeting == null) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.DateRange,
+                    title = "Sin reunión seleccionada",
+                    message = "Elige la reunión de trabajo antes de identificarte.",
+                    actionLabel = "Elegir reunión",
+                    actionIcon = Icons.Default.DateRange,
+                    onAction = onChooseMeeting,
+                )
+            }
+            return@ScreenList
+        }
         item {
-            ScreenHeader("Operador", "Identifica a quien registra asistencias en este dispositivo. Es opcional.")
+            ScreenHeader(
+                "Identificación",
+                "Cada asistencia queda registrada con tu nombre. El PIN de ${meeting.label()} lo entrega el administrador.",
+            )
+        }
+        if (operator != null) {
+            item { Admonition("Registrando como $operator en ${meeting.name}.", AdmonitionKind.Success) }
+            item {
+                SecondaryButton("Cerrar sesión (cambiar de persona)", Icons.Default.Close, onEnd, Modifier.fillMaxWidth())
+            }
+            return@ScreenList
+        }
+        if (meeting.pinHash.isBlank()) item {
+            Admonition(
+                "Esta reunión se importó sin PIN. Pide al administrador un paquete nuevo e impórtalo.",
+                AdmonitionKind.Danger,
+            )
         }
         item {
             OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                label = { Text("Identificador") },
+                value = name,
+                onValueChange = onNameChange,
+                label = { Text("Tu nombre") },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 trailingIcon = {
-                    if (value.isNotEmpty()) IconButton(onClick = { onValueChange("") }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Borrar identificador")
+                    if (name.isNotEmpty()) IconButton(onClick = { onNameChange("") }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Borrar nombre")
                     }
                 },
-                supportingText = { Text("Se guarda en este dispositivo y acompaña cada asistencia.") },
+                supportingText = { Text("Aparecerá en cada asistencia que registres.") },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next,
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = pin,
+                onValueChange = onPinChange,
+                label = { Text("PIN de la reunión") },
+                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                supportingText = { Text("De 6 a 8 dígitos. Se verifica en el teléfono, sin conexión.") },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = {
                     focusManager.clearFocus()
-                    onSave()
+                    onStart()
                 }),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         item {
-            PrimaryButton("Guardar identificador", Icons.Default.Check, onSave, Modifier.fillMaxWidth())
-        }
-        item {
-            Admonition(
-                if (operator.isBlank()) "Aún no hay un identificador guardado." else "Operador actual: $operator",
-                if (operator.isBlank()) AdmonitionKind.Note else AdmonitionKind.Info,
+            PrimaryButton(
+                if (verifying) "Verificando…" else "Identificarme",
+                Icons.Default.Check,
+                {
+                    focusManager.clearFocus()
+                    onStart()
+                },
+                Modifier.fillMaxWidth(),
+                enabled = !verifying && meeting.pinHash.isNotBlank() && name.isNotBlank() && pin.length >= 6,
             )
         }
     }
@@ -939,6 +1029,8 @@ private fun OperatorScreen(
 private fun RegisterScreen(
     modifier: Modifier,
     meeting: LocalMeeting?,
+    operator: String?,
+    onIdentify: () -> Unit,
     registered: Int,
     query: String,
     onQueryChange: (String) -> Unit,
@@ -966,6 +1058,21 @@ private fun RegisterScreen(
         }
         return
     }
+    if (operator == null) {
+        ScreenList(modifier) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Lock,
+                    title = "Identifícate para registrar",
+                    message = "Escribe tu nombre y el PIN de ${meeting.name}. Cada asistencia quedará a tu nombre.",
+                    actionLabel = "Identificarme",
+                    actionIcon = Icons.Default.Person,
+                    onAction = onIdentify,
+                )
+            }
+        }
+        return
+    }
     ScreenList(modifier, bottomPadding = 96) {
         item {
             Surface(
@@ -980,7 +1087,7 @@ private fun RegisterScreen(
                 ) {
                     Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text(
-                        "$registered asistencias registradas en ${meeting.name}",
+                        "$registered asistencias en ${meeting.name} · Registra: $operator",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f),
                     )
@@ -1103,6 +1210,8 @@ private fun RegisterScreen(
 private fun ExportScreen(
     modifier: Modifier,
     meeting: LocalMeeting?,
+    operator: String?,
+    onIdentify: () -> Unit,
     meetings: List<LocalMeeting>,
     attendance: List<AttendanceDisplay>,
     packageRosterCount: Int,
@@ -1144,14 +1253,26 @@ private fun ExportScreen(
             }
         }
         item {
-            PrimaryButton(
-                "Exportar ${attendance.size} asistencias",
-                Icons.Default.Share,
-                { onExport(meeting) },
-                Modifier.fillMaxWidth(),
+            if (operator == null) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Admonition("Identifícate con tu nombre y el PIN de la reunión para exportar.", AdmonitionKind.Warning)
+                    SecondaryButton("Identificarme", Icons.Default.Lock, onIdentify, Modifier.fillMaxWidth())
+                }
+            } else {
+                PrimaryButton(
+                    "Exportar ${attendance.size} asistencias",
+                    Icons.Default.Share,
+                    { onExport(meeting) },
+                    Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        item {
+            Admonition(
+                "Al exportar, las asistencias locales se conservan. El administrador puede combinar los archivos de varios teléfonos.",
+                AdmonitionKind.Info,
             )
         }
-        item { Admonition("Al exportar, las asistencias locales se conservan en el dispositivo.", AdmonitionKind.Info) }
         item { SectionHeading("Asistencias registradas") }
         if (attendance.isEmpty()) item {
             Text(
@@ -1177,6 +1298,11 @@ private fun AttendanceRow(record: AttendanceDisplay, meetings: List<LocalMeeting
                     Text(record.participantName, fontWeight = FontWeight.SemiBold)
                     Text(
                         "${record.recordedAt} · ${record.method}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "Registró: ${record.operatorLabel.ifBlank { "Sin identificar" }}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -43,6 +43,11 @@ class DomainError(Exception):
     pass
 
 
+ATTENDANCE_PIN_PATTERN = re.compile(r"[0-9]{6,8}")
+# Iteraciones moderadas: la app Asistencia verifica el PIN en el teléfono sin conexión.
+ATTENDANCE_PIN_ITERATIONS = 210_000
+
+
 def _publish(topic, payload):
     transaction.on_commit(lambda: RealtimeEvent.objects.create(topic=topic, payload=payload))
 
@@ -480,9 +485,35 @@ def _public_key_bytes(private_key=None):
 
 
 @transaction.atomic
+def set_attendance_pin(meeting, pin, user):
+    require_meeting_administration(user, meeting)
+    pin = (pin or "").strip()
+    if not ATTENDANCE_PIN_PATTERN.fullmatch(pin):
+        raise ValidationError("El PIN debe tener entre 6 y 8 dígitos.")
+    from django.contrib.auth.hashers import PBKDF2PasswordHasher
+    from django.utils.crypto import get_random_string
+
+    meeting.attendance_pin_hash = PBKDF2PasswordHasher().encode(
+        pin, get_random_string(22), iterations=ATTENDANCE_PIN_ITERATIONS
+    )
+    meeting.updated_by = user
+    meeting.save(update_fields=("attendance_pin_hash", "updated_by"))
+    AuditEvent.objects.create(
+        actor=user, action="meeting.attendance_pin_changed", object_type="Meeting",
+        object_id=str(meeting.pk), metadata={},
+    )
+
+
+def require_attendance_pin(meeting):
+    if not meeting.attendance_pin_hash:
+        raise DomainError("Define el PIN de asistencia offline de la reunión antes de exportar el paquete.")
+
+
+@transaction.atomic
 def export_attendance_package(meeting_id, user):
     meeting = Meeting.objects.get(pk=meeting_id)
     require_meeting_administration(user, meeting)
+    require_attendance_pin(meeting)
     private = _private_key()
     code_query = AttendanceCode.objects.filter(valid=True).select_related(
         "participant", "participant__origin_meeting", "meeting"
@@ -527,6 +558,7 @@ def export_attendance_package(meeting_id, user):
                 "starts_at": meeting.starts_at.isoformat(),
                 "location": meeting.location,
                 "allow_cross_meeting_attendance": meeting.allow_cross_meeting_attendance,
+                "attendance_pin_hash": meeting.attendance_pin_hash,
                 "invited_count": Participant.objects.filter(origin_meeting=meeting)
                 .exclude(invitation_status=Participant.InvitationStatus.NOT_INVITED)
                 .count(),
@@ -747,4 +779,11 @@ def import_attendance_results(uploaded_file, user, expected_meeting=None):
         metadata={"export_id": str(export_id), "created": len(created), "duplicates": len(duplicates), "conflicts": len(conflicts)},
     )
     _publish("attendance", {"event": "imported", "meeting_id": str(meeting_id), "new_records": len(created)})
-    return {"export_id": str(export_id), "created": created, "duplicates": duplicates, "conflicts": conflicts}
+    by_operator = {}
+    for item, *_ in parsed:
+        label = str(item.get("operator_label", data.get("operator_label", ""))).strip()[:128] or "Sin identificar"
+        by_operator[label] = by_operator.get(label, 0) + 1
+    return {
+        "export_id": str(export_id), "created": created, "duplicates": duplicates, "conflicts": conflicts,
+        "by_operator": by_operator,
+    }

@@ -28,7 +28,10 @@ class BackendIntegrationTests(TestCase):
         self.root = get_user_model().objects.create_superuser("root", password="Root-Testing-Canyon-982!")
         self.operator = get_user_model().objects.create_user("operator", password="Operator-Testing-Canyon-982!")
         self.operator.groups.add(Group.objects.get(name="OPERADOR"))
-        self.meeting = Meeting.objects.create(number=1, name="Reunión", starts_at=timezone.now(), administrator=self.root)
+        self.meeting = Meeting.objects.create(
+            number=1, name="Reunión", starts_at=timezone.now(), administrator=self.root,
+            attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
+        )
         self.meeting.operators.add(self.operator)
         self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.root)
 

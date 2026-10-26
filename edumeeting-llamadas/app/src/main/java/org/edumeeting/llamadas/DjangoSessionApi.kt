@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.JavaNetCookieJar
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -106,7 +107,24 @@ class DjangoSessionApi internal constructor(baseUrl: String, clientBuilder: OkHt
 
     fun get(path: String): JSONObject = request(path, null)
 
-    fun post(path: String, body: JSONObject): JSONObject = request(path, body)
+    fun post(path: String, body: JSONObject): JSONObject =
+        request(path, body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+
+    fun upload(path: String, fileName: String, contents: ByteArray): JSONObject = request(
+        path,
+        MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, contents.toRequestBody("application/zip".toMediaType()))
+            .build(),
+    )
+
+    fun download(path: String): ByteArray {
+        val response = service.get(url(path), headers()).execute()
+        if (!response.isSuccessful) {
+            val text = response.errorBody()?.use { it.string() }.orEmpty()
+            throw IllegalStateException(errorMessage(response.code(), text))
+        }
+        return response.body()?.use { it.bytes() } ?: throw IllegalStateException("El servidor no envió el archivo.")
+    }
 
     fun logout() {
         post("/api/v1/mobile/logout/", JSONObject())
@@ -114,7 +132,7 @@ class DjangoSessionApi internal constructor(baseUrl: String, clientBuilder: OkHt
         meetingId = null
     }
 
-    private fun request(path: String, body: JSONObject?): JSONObject {
+    private fun request(path: String, body: RequestBody?): JSONObject {
         val requestUrl = url(path)
         val headers = headers().apply { put("Accept", "application/json") }
         val call = if (body == null) {
@@ -125,27 +143,27 @@ class DjangoSessionApi internal constructor(baseUrl: String, clientBuilder: OkHt
                 ?: throw IllegalStateException("No hay un token CSRF vigente. Inicia sesión de nuevo.")
             headers["X-CSRFToken"] = csrfToken
             headers["Referer"] = "${baseUrl.toString().trimEnd('/')}/"
-            service.post(requestUrl, headers, body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            service.post(requestUrl, headers, body)
         }
         val response = call.execute()
         val text = (response.body() ?: response.errorBody())?.use { it.string() }.orEmpty()
-        if (!response.isSuccessful) {
-            val detail = try {
-                JSONObject(text).optString("error")
-            } catch (_: JSONException) {
-                ""
-            }
-            throw IllegalStateException(
-                when (response.code()) {
-                    302, 401 -> "La sesión venció. Inicia sesión de nuevo."
-                    else -> detail.ifBlank { "Error del servidor (HTTP ${response.code()})." }
-                },
-            )
-        }
+        if (!response.isSuccessful) throw IllegalStateException(errorMessage(response.code(), text))
         return try {
             JSONObject(text)
         } catch (error: JSONException) {
             throw IllegalStateException("El servidor devolvió una respuesta JSON inválida.", error)
+        }
+    }
+
+    private fun errorMessage(code: Int, text: String): String {
+        val detail = try {
+            JSONObject(text).optString("error")
+        } catch (_: JSONException) {
+            ""
+        }
+        return when (code) {
+            302, 401 -> "La sesión venció. Inicia sesión de nuevo."
+            else -> detail.ifBlank { "Error del servidor (HTTP $code)." }
         }
     }
 }

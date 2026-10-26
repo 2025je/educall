@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 
 from attendance.access import require_meeting_administration
 from attendance.models import Meeting, PackageExportJob
+from attendance.services import DomainError, require_attendance_pin
 from attendance.tasks import generate_attendance_package
 from .permissions import IsAttendanceAdministrator
 
@@ -37,6 +38,10 @@ class PackageExportCreateView(APIView):
     def post(self, request, meeting_id):
         meeting = get_object_or_404(Meeting, pk=meeting_id)
         require_meeting_administration(request.user, meeting)
+        try:
+            require_attendance_pin(meeting)
+        except DomainError as exc:
+            raise ValidationError(str(exc))
         with transaction.atomic():
             job = PackageExportJob.objects.create(
                 meeting=meeting, requested_by=request.user, expires_at=timezone.now() + timedelta(days=1),

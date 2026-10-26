@@ -19,7 +19,9 @@ from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from attendance.access import accessible_meetings, active_meeting, has_role, managed_meetings, require_meeting_role
+from attendance.access import (
+    accessible_meetings, active_meeting, has_role, managed_meetings, require_meeting_administration, require_meeting_role,
+)
 from attendance.models import (
     AttendanceCode,
     AttendanceConflict,
@@ -42,7 +44,9 @@ from attendance.services import (
     prepare_whatsapp_message,
     record_call_outcome,
     record_inbound_call,
+    require_attendance_pin,
     resolve_attendance_conflict,
+    set_attendance_pin,
 )
 from attendance.workspace import (
     create_participant,
@@ -305,6 +309,14 @@ class ExportPackageView(RawResponseAPIView):
     permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
 
     def get(self, request, meeting_id):
+        meeting = Meeting.objects.filter(pk=meeting_id).first()
+        if meeting is None:
+            raise NotFound("La reunión no existe.")
+        require_meeting_administration(request.user, meeting)
+        try:
+            require_attendance_pin(meeting)
+        except DomainError as exc:
+            raise ValidationError(str(exc))
         try:
             package, contents = export_attendance_package(meeting_id, request.user)
         except Meeting.DoesNotExist:
@@ -352,6 +364,53 @@ class ImportResultsView(APIView):
         except (Meeting.DoesNotExist, Participant.DoesNotExist) as exc:
             raise ValidationError(str(exc))
         return Response(report)
+
+
+class MeetingAttendancePinView(APIView):
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
+
+    def meeting(self, request, meeting_id):
+        meeting = Meeting.objects.filter(pk=meeting_id).first()
+        if meeting is None:
+            raise NotFound("La reunión no existe.")
+        require_meeting_administration(request.user, meeting)
+        return meeting
+
+    def get(self, request, meeting_id):
+        return Response({"configured": bool(self.meeting(request, meeting_id).attendance_pin_hash)})
+
+    def put(self, request, meeting_id):
+        meeting = self.meeting(request, meeting_id)
+        set_attendance_pin(meeting, str(request.data.get("pin", "")), request.user)
+        return Response({"configured": True})
+
+    post = put
+
+
+class MeetingConflictListView(APIView):
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
+
+    @staticmethod
+    def record_data(record):
+        return {
+            "id": str(record.pk), "recorded_at": record.recorded_at, "method": record.method,
+            "device_id": record.device_id, "operator_label": record.operator_label,
+            "exception_note": record.exception_note,
+        }
+
+    def get(self, request, meeting_id):
+        meeting = Meeting.objects.filter(pk=meeting_id).first()
+        if meeting is None:
+            raise NotFound("La reunión no existe.")
+        require_meeting_administration(request.user, meeting)
+        conflicts = AttendanceConflict.objects.filter(
+            first_record__effective_meeting=meeting, resolved_at__isnull=True,
+        ).select_related("first_record__participant", "second_record").order_by("created_at")
+        return Response({"conflicts": [{
+            "id": conflict.pk,
+            "participant_name": conflict.first_record.participant_name_snapshot or conflict.first_record.participant.full_name,
+            "records": [self.record_data(conflict.first_record), self.record_data(conflict.second_record)],
+        } for conflict in conflicts]})
 
 
 class ResolveConflictView(APIView):

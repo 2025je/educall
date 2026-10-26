@@ -20,7 +20,7 @@ class AttendanceConfig(AppConfig):
             m2m_fields={"groups"},
         )
         auditlog.register(Group, include_fields=["name"], m2m_fields={"permissions"})
-        auditlog.register(Meeting, m2m_fields={"registrars", "operators"})
+        auditlog.register(Meeting, exclude_fields=["attendance_pin_hash"], m2m_fields={"registrars", "operators"})
         auditlog.register(Participant, exclude_fields=["phone"], mask_fields=["full_name"])
         auditlog.register(OperatorProfile)
         post_save.connect(publish_realtime_event, sender=RealtimeEvent, dispatch_uid="attendance.websocket_events")

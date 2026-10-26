@@ -1,5 +1,6 @@
 package org.edumeeting.asistencia.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -16,6 +17,7 @@ data class LocalMeeting(
     val confirmedCount: Int,
     val packageId: String,
     val packageExportedAt: String,
+    @ColumnInfo(defaultValue = "") val pinHash: String = "",
 )
 
 @Entity(

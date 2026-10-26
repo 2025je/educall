@@ -107,6 +107,31 @@ class DjangoSessionApiTest {
     }
 
     @Test
+    fun uploadsMultipartWithCsrfAndDownloadsBinaryFiles() {
+        login()
+        server.takeRequest()
+        server.takeRequest()
+        api.meetingId = "meeting-123"
+        server.enqueue(MockResponse().setBody("""{"created":["a"],"duplicates":[],"conflicts":[]}"""))
+        val report = api.upload("/api/v1/attendance/import/", "resultados.attendance-results", byteArrayOf(80, 75, 3, 4))
+        assertEquals(1, report.getJSONArray("created").length())
+        val upload = server.takeRequest()
+        assertEquals("rotated-token", upload.getHeader("X-CSRFToken"))
+        assertTrue(upload.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
+        val body = upload.body.readUtf8()
+        assertTrue(body.contains("name=\"file\"; filename=\"resultados.attendance-results\""))
+
+        server.enqueue(MockResponse().setBody(okio.Buffer().write(byteArrayOf(1, 2, 3))))
+        assertArrayEquals(byteArrayOf(1, 2, 3), api.download("/api/v1/exports/job/download/"))
+        assertEquals("meeting-123", server.takeRequest().getHeader("X-EduMeeting-Meeting"))
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"Todavía no está disponible"}"""))
+        assertEquals(
+            "Todavía no está disponible",
+            assertThrows(IllegalStateException::class.java) { api.download("/api/v1/exports/job/download/") }.message,
+        )
+    }
+
+    @Test
     fun rejectsInvalidCredentialsMissingCsrfAndInsecureUrls() {
         server.enqueue(MockResponse().setBody("""<input name="csrfmiddlewaretoken" value="token">"""))
         server.enqueue(MockResponse().setBody("Invalid login"))
