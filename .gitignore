@@ -13,6 +13,6 @@ local.properties
 *.keystore
 *.attendance
 *.attendance-results
-educall-local-root.crt
+edumeeting-local-root.crt
 staticfiles/
 artifacts/

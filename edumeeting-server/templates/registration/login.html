@@ -1,0 +1,16 @@
+{% extends "attendance/base.html" %}
+{% block title %}Iniciar sesión{% endblock %}
+{% block body_class %}md-login{% endblock %}
+{% block anonymous %}
+<main class="md-login__main">
+  <div class="md-card md-login__card">
+    <h1>Iniciar sesión</h1>
+    <p>Usa tu cuenta autorizada de EduMeeting.</p>
+    <form method="post" class="md-form">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit" class="md-button md-button--block">Iniciar sesión</button>
+    </form>
+  </div>
+</main>
+{% endblock %}

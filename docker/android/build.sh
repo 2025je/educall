@@ -2,8 +2,8 @@
 set -eu
 
 case "${APP_NAME:-}" in
-    educall-dial|educall-registro) ;;
-    *) echo "APP_NAME debe ser educall-dial o educall-registro." >&2; exit 1 ;;
+    edumeeting-llamadas|edumeeting-asistencia) ;;
+    *) echo "APP_NAME debe ser edumeeting-llamadas o edumeeting-asistencia." >&2; exit 1 ;;
 esac
 
 workdir="$(mktemp -d)"
@@ -14,7 +14,7 @@ tar -C "$workdir" -xf "$workdir/source.tar"
 cd "$workdir"
 
 set --
-if [ "$APP_NAME" = "educall-registro" ]; then
+if [ "$APP_NAME" = "edumeeting-asistencia" ]; then
     if [ -z "${ATTENDANCE_SIGNING_PUBLIC_KEY:-}" ]; then
         echo "Configura ATTENDANCE_SIGNING_PUBLIC_KEY en .env o en el entorno (clave publica Ed25519 Base64)." >&2
         exit 1

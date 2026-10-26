@@ -1,0 +1,7 @@
+{% extends "attendance/base.html" %}
+{% block title %}{% if active_meeting %}{{ active_meeting.name }}{% else %}Inicio{% endif %}{% endblock %}
+{% block nav_home %} md-nav__link--active{% endblock %}
+{% block tab_home %} md-tabs__link--active{% endblock %}
+{% block breadcrumbs %}{% if active_meeting %} <span>›</span> <span>{{ active_meeting.name }}</span>{% endif %}{% endblock %}
+{% block nav_home_children %}{% if active_meeting %}<ul>{% include "attendance/home_toc.html" %}</ul>{% endif %}{% endblock %}
+{% block toc %}{% if active_meeting %}{% include "attendance/home_toc.html" %}{% else %}<li><a class="md-nav__link" href="#seleccionar">Selecciona una reunión</a></li>{% endif %}{% endblock %}

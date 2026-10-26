@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $projectRoot "educall-local-root.crt"
+    $OutputPath = Join-Path $projectRoot "edumeeting-local-root.crt"
 } elseif (-not [IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path (Get-Location) $OutputPath
 }
@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath $outputDirectory)) {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 }
 
-$temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "educall-ca-$([Guid]::NewGuid().ToString('N'))"
+$temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) "edumeeting-ca-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 
 try {

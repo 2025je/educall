@@ -1,23 +1,25 @@
+name: edumeeting
+
 services:
-  dial:
-    image: educall-android-builder
+  llamadas:
+    image: edumeeting-android-builder
     build: ./docker/android
     environment:
-      APP_NAME: educall-dial
+      APP_NAME: edumeeting-llamadas
     volumes:
-      - ./educall-dial:/source:ro
+      - ./edumeeting-llamadas:/source:ro
       - ./artifacts/android:/output
       - gradle_cache:/root/.gradle
       - android_debug_keys:/root/.android
 
-  registro:
-    image: educall-android-builder
+  asistencia:
+    image: edumeeting-android-builder
     build: ./docker/android
     environment:
-      APP_NAME: educall-registro
+      APP_NAME: edumeeting-asistencia
       ATTENDANCE_SIGNING_PUBLIC_KEY: ${ATTENDANCE_SIGNING_PUBLIC_KEY:-}
     volumes:
-      - ./educall-registro:/source:ro
+      - ./edumeeting-asistencia:/source:ro
       - ./artifacts/android:/output
       - gradle_cache:/root/.gradle
       - android_debug_keys:/root/.android

@@ -1,0 +1,45 @@
+{% extends "attendance/base.html" %}
+{% load static %}
+{% block title %}Gestionar reuniones{% endblock %}
+{% block head %}<script src="{% static 'attendance/meeting_form.js' %}" defer></script>{% endblock %}
+{% block nav_meetings %} md-nav__link--active{% endblock %}
+{% block tab_meetings %} md-tabs__link--active{% endblock %}
+{% block breadcrumbs %} <span>›</span> <span>Gestionar reuniones</span>{% endblock %}
+{% block toc %}<li><a class="md-nav__link" href="#crear">Crear reunión nueva</a></li><li><a class="md-nav__link" href="#mis-reuniones">Mis reuniones</a></li>{% endblock %}
+{% block content %}
+<h1>Gestionar reuniones</h1>
+<p>Crea, edita, activa o desactiva tus reuniones. Esta vista no depende de la reunión activa: funciona aunque todavía no exista ninguna.</p>
+<section class="md-section">
+  <h2 id="crear">Crear reunión nueva</h2>
+  <div class="admonition info"><p>Serás el único administrador de la reunión y quedará seleccionada como activa. Después, desde Inicio, asigna registradores y operadores existentes y revisa sus estadísticas.</p>
+  <p>Fecha y hora en la zona del servidor: <strong>{{ meeting_timezone }}</strong>. El número va de 1 a 99 y no puede repetirse en la misma fecha.</p></div>
+  <form method="post" class="md-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    {% include "attendance/code_preview.html" %}
+    <button type="submit" class="md-button">Crear reunión</button>
+  </form>
+</section>
+<section class="md-section">
+  <h2 id="mis-reuniones">Mis reuniones</h2>
+  <p>Incluye reuniones inactivas. Una reunión inactiva no aparece para registradores ni operadores hasta reactivarla.</p>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>N.º</th><th>Nombre</th><th>Fecha</th><th>Lugar</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <tbody>
+    {% for meeting in meetings %}
+    <tr>
+      <td>{{ meeting.number }}</td>
+      <td><strong>{{ meeting.name }}</strong>{% if active_meeting.pk == meeting.pk %} <span class="md-chip">Activa en tu sesión</span>{% endif %}</td>
+      <td>{{ meeting.starts_at|date:"d/m/Y H:i" }}</td>
+      <td>{{ meeting.location|default:"Sin lugar" }}</td>
+      <td>{% if meeting.active %}<span class="md-chip md-chip--ok">Activa</span>{% else %}<span class="md-chip md-chip--muted">Inactiva</span>{% endif %}{% if not meeting.administrator_id %} <span class="md-chip md-chip--muted">Sin administrador</span>{% endif %}</td>
+      <td><div class="actions">
+        <a class="md-button md-button--small" href="{% url 'meeting-edit' meeting.pk %}">Editar</a>
+        <form method="post" action="{% url 'meeting-toggle' meeting.pk %}">{% csrf_token %}<button class="md-button md-button--small secondary">{% if meeting.active %}Desactivar{% else %}Activar{% endif %}</button></form>
+      </div></td>
+    </tr>
+    {% empty %}<tr><td colspan="6">No hay reuniones todavía. Crea la primera con el formulario.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

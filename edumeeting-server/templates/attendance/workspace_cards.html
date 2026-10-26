@@ -1,0 +1,75 @@
+{% if not active_meeting %}
+<h1 id="seleccionar">Selecciona una reunión</h1>
+<p>Solo aparecen reuniones activas con administrador y con un rol asignado a tu cuenta. Elige una en el menú lateral, en <strong>Reunión activa</strong>.</p>
+{% if not available_meetings %}<div class="admonition warning"><p class="admonition-title">Sin reuniones disponibles</p><p>No tienes reuniones activas.{% if not can_create %} Solicita la asignación al administrador; las reuniones antiguas requieren primero revisión del superusuario.{% endif %}</p></div>{% endif %}
+{% if can_create %}<div class="admonition info"><p class="admonition-title">Administrador</p><p>Crea, edita o activa reuniones en <a href="{% url 'meeting-management' %}">Gestionar reuniones</a>. Después selecciónala para asignar usuarios y ver sus estadísticas.</p></div>{% endif %}
+{% else %}
+<h1>{{ active_meeting.number }} · {{ active_meeting.name }}</h1>
+<p class="md-meta">{{ active_meeting.starts_at|date:"d/m/Y H:i" }} · {{ active_meeting.location|default:"Sin lugar" }}</p>
+<div class="md-grid">
+  {% if can_manage %}
+  <a class="md-grid__card" href="#asignaciones"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>Asignar usuarios</span><hr><span>Elige registradores y operadores para esta reunión.</span><span class="md-grid__more">→ Asignar</span></a>
+  <a class="md-grid__card" href="#estadisticas"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3"/></svg>Estadísticas</span><hr><span>Registros, llamadas e invitaciones aceptadas por usuario.</span><span class="md-grid__more">→ Ver estadísticas</span></a>
+  {% endif %}
+  {% if can_register %}
+  <a class="md-grid__card" href="#registro"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>Registrar persona</span><hr><span>Agrega datos de contacto a la cola de llamadas.</span><span class="md-grid__more">→ Registrar</span></a>
+  {% endif %}
+  {% if can_operate %}
+  <a class="md-grid__card" href="#cola"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>Cola de llamadas</span><hr><span>Toma la siguiente llamada y registra el resultado.</span><span class="md-grid__more">→ Llamar</span></a>
+  <a class="md-grid__card" href="#buscar"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Buscar participante</span><hr><span>Encuentra personas y arma campañas de seguimiento.</span><span class="md-grid__more">→ Buscar</span></a>
+  <a class="md-grid__card" href="#whatsapp"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></svg>Preparar WhatsApp</span><hr><span>Previsualiza el mensaje y confirma el envío.</span><span class="md-grid__more">→ Preparar</span></a>
+  {% endif %}
+</div>
+{% endif %}
+{% if can_manage %}
+<section class="md-section">
+  <h2 id="asignaciones">Asignar usuarios</h2>
+  <p>Marca las cuentas existentes que participarán en esta reunión; desmarca una casilla para quitar su asignación.</p>
+  <form method="post" action="{% url 'meeting-members' %}" class="md-form">
+    {% csrf_token %}
+    {{ members_form.non_field_errors }}
+    {% for field in members_form %}
+    <fieldset class="md-checklist">
+      <legend>{{ field.label }}</legend>
+      {{ field.errors }}
+      {% for option in field %}
+      <label class="md-check">{{ option.tag }} {{ option.choice_label }}</label>
+      {% empty %}
+      <p class="md-meta">No hay cuentas activas de este grupo.</p>
+      {% endfor %}
+    </fieldset>
+    {% endfor %}
+    <button class="md-button">Guardar asignaciones</button>
+  </form>
+</section>
+<section class="md-section">
+  <h2 id="estadisticas">Estadísticas de la reunión</h2>
+  <div class="md-stats">
+    <div><strong>{{ statistics.registered }}</strong><span>Personas registradas</span></div>
+    <div><strong>{{ statistics.pending_calls }}</strong><span>Llamadas pendientes</span></div>
+    <div><strong>{{ statistics.completed_calls }}</strong><span>Finalizadas</span></div>
+    <div><strong>{{ statistics.call_attempts }}</strong><span>Intentos</span></div>
+    <div><strong>{{ statistics.accepted }}</strong><span>Invitaciones aceptadas</span></div>
+  </div>
+  <h3>Actividad por usuario</h3>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>Usuario</th><th>Personas registradas</th><th>Intentos</th><th>Aceptaciones</th></tr></thead>
+    <tbody>
+    {% for user in statistics.users %}
+    <tr><td>{{ user.username }}</td><td>{{ user.registered }}</td><td>{{ user.call_attempts }}</td><td>{{ user.accepted }}</td></tr>
+    {% empty %}<tr><td colspan="4">No hay usuarios ni actividad registrados.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% if can_register %}
+<section class="md-section">
+  <h2 id="registro">Registrar persona</h2>
+  <p>Se agregará una tarea a la cola de esta reunión. Solo se podrá llamar cuando exista autorización de contacto.</p>
+  <form method="post" action="{% url 'register-participant' %}" class="md-form">
+    {% csrf_token %}
+    {{ participant_form.as_p }}
+    <button class="md-button">Agregar a la cola</button>
+  </form>
+</section>
+{% endif %}

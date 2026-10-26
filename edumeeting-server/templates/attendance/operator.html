@@ -1,0 +1,71 @@
+{% extends "attendance/home_base.html" %}
+{% load static %}
+{% block head %}<script src="{% static 'attendance/operator.js' %}" defer></script>{% endblock %}
+{% block content %}
+{% include "attendance/workspace_cards.html" %}
+<section class="md-section">
+  <div class="section-heading"><h2 id="cola">Cola de llamadas</h2><button id="next-call" class="md-button">Siguiente llamada</button></div>
+  <p id="call-message" role="status">Solicita una llamada cuando estés listo.</p>
+  <article id="active-call" class="md-card" hidden>
+    <h3 id="participant-name"></h3>
+    <p id="participant-details"></p>
+    <ol id="call-history"></ol>
+    <label for="call-notes">Notas</label>
+    <textarea id="call-notes" rows="3"></textarea>
+    <div class="actions">
+      <button data-outcome="no_answer" class="md-button secondary">No contesta</button>
+      <button data-outcome="contacted" class="md-button secondary">Contactado</button>
+      <button data-outcome="accepted" class="md-button">Aceptó</button>
+      <button data-outcome="declined" class="md-button secondary">Rechazó</button>
+      <button data-outcome="do_not_contact" class="md-button danger">No volver a contactar</button>
+      <button data-outcome="follow_up" class="md-button secondary">Seguimiento</button>
+    </div>
+  </article>
+</section>
+
+<section class="md-section">
+  <h2 id="buscar">Buscar participante</h2>
+  <form id="search-form">
+    <label for="search-query">Nombre o teléfono (vacío para listar)</label>
+    <div class="inline"><input id="search-query" minlength="2"><button class="md-button">Buscar / listar</button></div>
+  </form>
+  <ul id="search-results" class="results"></ul>
+  <button id="more-search" type="button" class="md-button secondary" hidden>Ver más participantes</button>
+  <div class="campaign-builder">
+    <h3>Campaña</h3>
+    <label for="campaign-name">Nombre</label>
+    <input id="campaign-name" maxlength="120" value="Seguimiento de participantes">
+    <p id="campaign-count">0 destinatarios</p>
+    <ul id="campaign-selection" class="results"></ul>
+    <button id="prepare-campaign" class="md-button" disabled>Preparar campaña</button>
+  </div>
+  <div id="campaign-results" hidden>
+    <h3>Mensajes preparados</h3>
+    <ul id="campaign-message-list" class="results"></ul>
+  </div>
+</section>
+
+<section class="md-section">
+  <h2 id="whatsapp">Preparar WhatsApp</h2>
+  <div class="admonition note"><p>El enlace abre WhatsApp; el envío siempre lo confirma el operador.</p></div>
+  <label for="template-id">Plantilla</label>
+  <select id="template-id">
+    <option value="">Selecciona una plantilla</option>
+    {% for template in templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}
+  </select>
+  <input type="hidden" id="message-participant-id">
+  <div class="actions"><button id="prepare-message" class="md-button" disabled>Previsualizar mensaje</button></div>
+  <div id="message-preview" hidden>
+    <pre id="message-content"></pre>
+    <div class="actions">
+      <a id="whatsapp-link" class="md-button" target="_blank" rel="noopener noreferrer">Abrir WhatsApp</a>
+      <a id="qr-download" class="md-button secondary" hidden download>Descargar QR para adjuntarlo manualmente</a>
+    </div>
+    <div class="actions">
+      <button data-message-status="sent" class="md-button">Confirmo que se envió</button>
+      <button data-message-status="failed" class="md-button secondary">Fallido</button>
+      <button data-message-status="cancelled" class="md-button secondary">Cancelar</button>
+    </div>
+  </div>
+</section>
+{% endblock %}

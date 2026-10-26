@@ -1,7 +1,7 @@
 services:
   web:
     environment:
-      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1},${EDUCALL_LOCAL_HTTPS_HOSTS:-localhost, 127.0.0.1, 10.0.2.2}"
+      DJANGO_ALLOWED_HOSTS: "${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1},${EDUMEETING_LOCAL_HTTPS_HOSTS:-localhost, 127.0.0.1, 10.0.2.2}"
       DJANGO_SECURE_COOKIES: "1"
       DJANGO_TRUST_X_FORWARDED_PROTO: "1"
       DJANGO_SECURE_SSL_REDIRECT: "0"
@@ -10,10 +10,10 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
-      EDUCALL_LOCAL_HTTPS_HOSTS: ${EDUCALL_LOCAL_HTTPS_HOSTS:-localhost, 127.0.0.1, 10.0.2.2}
-      EDUCALL_LOCAL_HTTPS_DEFAULT_SNI: ${EDUCALL_LOCAL_HTTPS_DEFAULT_SNI:-10.0.2.2}
+      EDUMEETING_LOCAL_HTTPS_HOSTS: ${EDUMEETING_LOCAL_HTTPS_HOSTS:-localhost, 127.0.0.1, 10.0.2.2}
+      EDUMEETING_LOCAL_HTTPS_DEFAULT_SNI: ${EDUMEETING_LOCAL_HTTPS_DEFAULT_SNI:-10.0.2.2}
     ports:
-      - "${EDUCALL_HTTPS_BIND_IP:-127.0.0.1}:443:443"
+      - "${EDUMEETING_HTTPS_BIND_IP:-127.0.0.1}:443:443"
     volumes:
       - ./docker/local-https/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
