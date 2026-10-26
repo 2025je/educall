@@ -57,7 +57,7 @@ from django.contrib.auth import get_user_model
 
 from . import serializers as s
 from .negotiation import IgnoreClientContentNegotiation
-from .permissions import IsSuperuser, model_permission, role_permission
+from .permissions import IsAttendanceAdministrator, model_permission, role_permission
 from .filters import AttendanceReportFilter, ParticipantFilter, apply_filters
 
 
@@ -302,7 +302,7 @@ class MessageStatusView(APIView):
 
 
 class ExportPackageView(RawResponseAPIView):
-    permission_classes = (IsAuthenticated, model_permission("attendance.add_attendancepackage", "No tienes permiso."), IsSuperuser)
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
 
     def get(self, request, meeting_id):
         try:
@@ -340,7 +340,7 @@ class AttendanceQrView(RawResponseAPIView):
 
 
 class ImportResultsView(APIView):
-    permission_classes = (IsAuthenticated, model_permission("attendance.add_attendancerecord", "No tienes permiso."), IsSuperuser)
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
@@ -355,7 +355,7 @@ class ImportResultsView(APIView):
 
 
 class ResolveConflictView(APIView):
-    permission_classes = (IsAuthenticated, model_permission("attendance.change_attendanceconflict", "No tienes permiso."), IsSuperuser)
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
 
     def post(self, request, conflict_id):
         data = s.validated_data(s.ResolveConflictSerializer(data=request.data))

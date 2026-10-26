@@ -3,6 +3,10 @@ package org.edumeeting.llamadas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -38,6 +42,7 @@ internal fun RoleWorkspace(
     onNotice: (String) -> Unit,
     state: RoleWorkspaceState,
 ) = with(state) {
+    val focusManager = LocalFocusManager.current
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (canManage) {
             Text("Tu equipo, en un vistazo", style = MaterialTheme.typography.headlineLarge)
@@ -132,12 +137,15 @@ internal fun RoleWorkspace(
                         value = fullName, onValueChange = { fullName = it },
                         label = { Text("Nombre completo") }, leadingIcon = { Icon(Icons.Default.Person, null) },
                         modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                     )
                     OutlinedTextField(
                         value = phone, onValueChange = { phone = it },
                         label = { Text("Teléfono") }, leadingIcon = { Icon(Icons.Default.Phone, null) },
                         modifier = Modifier.fillMaxWidth(), singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     )
                     Row(Modifier.fillMaxWidth().clickable(enabled = !busy) { consent = !consent }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = consent, onCheckedChange = { consent = it }, enabled = !busy)

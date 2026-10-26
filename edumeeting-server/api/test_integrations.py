@@ -221,15 +221,18 @@ class BackendIntegrationTests(TestCase):
             with self.assertRaises(DomainError):
                 generate_attendance_package(str(revoked.pk))
 
-    def test_export_controls_are_only_shown_to_superusers(self):
+    def test_offline_attendance_is_available_to_superusers_and_meeting_owners(self):
         self.client.force_login(self.root)
-        self.assertContains(self.client.get(reverse("meeting-management")), "data-export-url")
+        self.assertContains(self.client.get(reverse("meeting-management")), reverse("offline-attendance", args=[self.meeting.pk]))
         admin = get_user_model().objects.create_user("admin")
         admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.meeting.administrator = admin
         self.meeting.save(update_fields=["administrator"])
         self.client.force_login(admin)
-        self.assertNotContains(self.client.get(reverse("meeting-management")), "data-export-url")
+        listing = self.client.get(reverse("meeting-management"))
+        self.assertContains(listing, reverse("offline-attendance", args=[self.meeting.pk]))
+        self.assertNotContains(listing, reverse("offline-attendance", args=[self.other.pk]))
+        self.assertContains(self.client.get(reverse("offline-attendance", args=[self.meeting.pk])), "data-export-url")
 
     def test_auditlog_tracks_group_assignments(self):
         self.client.force_login(self.root)

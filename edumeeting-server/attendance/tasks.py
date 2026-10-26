@@ -2,32 +2,39 @@ import logging
 
 from auditlog.context import set_actor
 from celery import shared_task
+from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
 
+from .access import require_meeting_administration
 from .models import PackageExportJob
 from .services import DomainError, export_attendance_package
 
 logger = logging.getLogger(__name__)
 
 
+def _ensure_authorized(job):
+    try:
+        require_meeting_administration(job.requested_by, job.meeting)
+    except PermissionDenied as exc:
+        raise DomainError("La cuenta solicitante ya no está autorizada.") from exc
+
+
 @shared_task
 def generate_attendance_package(job_id):
     try:
         with transaction.atomic():
-            job = PackageExportJob.objects.select_for_update().select_related("requested_by").get(pk=job_id)
+            job = PackageExportJob.objects.select_for_update().select_related("requested_by", "meeting").get(pk=job_id)
             if job.status != PackageExportJob.Status.PENDING:
                 return
             if job.expires_at <= timezone.now():
                 raise DomainError("La solicitud de exportación venció.")
-            if not job.requested_by.is_active or not job.requested_by.is_superuser:
-                raise DomainError("La cuenta solicitante ya no está autorizada.")
+            _ensure_authorized(job)
             job.status = PackageExportJob.Status.RUNNING
             job.save(update_fields=["status"])
         with transaction.atomic():
-            job = PackageExportJob.objects.select_for_update().select_related("requested_by").get(pk=job_id)
-            if not job.requested_by.is_active or not job.requested_by.is_superuser:
-                raise DomainError("La cuenta solicitante ya no está autorizada.")
+            job = PackageExportJob.objects.select_for_update().select_related("requested_by", "meeting").get(pk=job_id)
+            _ensure_authorized(job)
             with set_actor(job.requested_by):
                 package, contents = export_attendance_package(job.meeting_id, job.requested_by)
             job.package = package

@@ -34,6 +34,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -894,6 +896,7 @@ private fun OperatorScreen(
     onValueChange: (String) -> Unit,
     onSave: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
     ScreenList(modifier) {
         item {
             ScreenHeader("Operador", "Identifica a quien registra asistencias en este dispositivo. Es opcional.")
@@ -913,6 +916,10 @@ private fun OperatorScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    focusManager.clearFocus()
+                    onSave()
+                }),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -943,6 +950,7 @@ private fun RegisterScreen(
     onRegister: (LocalParticipant) -> Unit,
     onChooseMeeting: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
     if (meeting == null) {
         ScreenList(modifier) {
             item {
@@ -1029,6 +1037,7 @@ private fun RegisterScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
         }

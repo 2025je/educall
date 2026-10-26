@@ -546,20 +546,23 @@ Se verificó la compilación Docker de ambas apps y la firma de sus APK debug. A
 
 ## Uso offline de EduMeeting Asistencia
 
-1. En el servidor, exporta el paquete firmado de la reunión mediante `GET /api/v1/meetings/{meeting_id}/package/` con una sesión autorizada.
+Estas operaciones las realiza el **administrador de la reunión** (el usuario del grupo ADMINISTRADOR que la creó) o un superusuario. En la web: **Gestionar reuniones → Asistencia offline** de cada reunión propia. Otros administradores, registradores y operadores reciben 403.
+
+1. En **Asistencia offline**, pulsa **Exportar asistencia** y descarga el paquete firmado (disponible 24 h). También existe `GET /api/v1/meetings/{meeting_id}/package/`.
 2. Transfiere el archivo `.attendance` por un canal controlado e impórtalo mediante el selector de documentos de Asistencia.
 3. La app verifica firma Ed25519, hashes y estructura antes de guardar los datos en Room.
 4. Selecciona y confirma explícitamente la reunión de trabajo. La selección persiste y no cambia por escanear, buscar o importar.
 5. Registra por QR o búsqueda de nombre, teléfono o código. La cámara es opcional; se evitan duplicados locales por participante y reunión efectiva.
 6. Exporta los resultados `.attendance-results`. Las asistencias permanecen en el dispositivo.
-7. Importa el archivo en el servidor mediante `POST /api/v1/attendance/import/`, campo multipart `file`, con una cuenta autorizada.
+7. En **Asistencia offline → Importar resultados**, sube el archivo (o usa `POST /api/v1/attendance/import/`, campo multipart `file`). Reimportar el mismo archivo es seguro; un archivo de otra reunión se rechaza.
+8. En **Resolver conflictos**, compara los registros duplicados (hora, método, dispositivo, operador), elige cuál se conserva y escribe el motivo. El otro queda rechazado y ambos permanecen en el historial.
 
 ### Formatos y límites
 
 - `.attendance` es un ZIP con `manifest.json`, `manifest.sig`, `meeting.json`, `participants.json` y `verification.json`. El manifiesto firmado incluye hashes SHA-256.
 - El QR contiene únicamente el código de asistencia, no el nombre ni el teléfono. Un QR copiado no demuestra identidad.
 - Los paquetes contienen datos personales en texto plano: protege su transferencia y el acceso al dispositivo.
-- Por defecto no se permite asistencia cruzada entre reuniones. Habilitarla amplía los datos exportados.
+- Por defecto no se permite asistencia cruzada entre reuniones. Habilitarla amplía los datos exportados; si exporta un administrador, solo se incluyen participantes de reuniones que él administra.
 - Un dispositivo offline no conoce cambios posteriores a la exportación. El servidor vuelve a validar los registros y deja los casos correspondientes en revisión.
 - Los resultados Android conservan UUID estables para importación idempotente, pero no tienen firma de dispositivo: no prueban criptográficamente quién registró cada asistencia.
 - No hay sincronización automática de dispositivos, envío automático de WhatsApp, confirmación de entrega ni adjunto automático del QR. El operador confirma el envío; la imagen QR se adjunta manualmente cuando corresponda.
@@ -635,11 +638,11 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET/POST /meetings/members/` | Consultar candidatos/asignaciones o guardar listas de IDs `registrars` y `operators`; solo el administrador de la reunión. |
 | `GET /meetings/statistics/` | Estadísticas de la reunión activa y actividad por usuario; solo su administrador. |
 | `POST /participants/` | Registrar `full_name`, `phone`, `contact_authorized` y crear tarea en la reunión activa; solo registradores asignados. |
-| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado. |
+| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado; solo el administrador de la reunión o un superusuario. |
 | `GET /codes/{code_id}/qr/` | Descargar el QR PNG de un código vigente. |
-| `POST /attendance/import/` | Importar resultados offline. |
+| `POST /attendance/import/` | Importar resultados offline de reuniones propias (administrador o superusuario). |
 | `GET /attendance/report/{meeting_id}/` | Consultar totales de la reunión. |
-| `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros. |
+| `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión o un superusuario. |
 | `GET /attendance/stream/` | Recibir eventos SSE publicados después del commit. |
 
 Sin Docker, ejecuta desde la carpeta del servidor:

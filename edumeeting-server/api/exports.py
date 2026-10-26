@@ -13,9 +13,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from attendance.access import require_meeting_administration
 from attendance.models import Meeting, PackageExportJob
 from attendance.tasks import generate_attendance_package
-from .permissions import IsSuperuser
+from .permissions import IsAttendanceAdministrator
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,11 @@ def job_data(job):
 
 
 class PackageExportCreateView(APIView):
-    permission_classes = (IsAuthenticated, IsSuperuser)
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
 
     def post(self, request, meeting_id):
         meeting = get_object_or_404(Meeting, pk=meeting_id)
+        require_meeting_administration(request.user, meeting)
         with transaction.atomic():
             job = PackageExportJob.objects.create(
                 meeting=meeting, requested_by=request.user, expires_at=timezone.now() + timedelta(days=1),
@@ -56,13 +58,15 @@ def enqueue_export(job):
 
 
 class PackageExportStatusView(APIView):
-    permission_classes = (IsAuthenticated, IsSuperuser)
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
 
     def get_job(self, request, job_id):
-        return get_object_or_404(
-            PackageExportJob.objects.filter(requested_by=request.user, expires_at__gt=timezone.now()),
+        job = get_object_or_404(
+            PackageExportJob.objects.select_related("meeting").filter(requested_by=request.user, expires_at__gt=timezone.now()),
             pk=job_id,
         )
+        require_meeting_administration(request.user, job.meeting)
+        return job
 
     def get(self, request, job_id):
         return Response(job_data(self.get_job(request, job_id)))

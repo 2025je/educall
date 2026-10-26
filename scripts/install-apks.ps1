@@ -101,7 +101,7 @@ if ($PairAddress) {
 }
 
 if (-not $Device) {
-    $ready = Get-ReadyDevices
+    $ready = @(Get-ReadyDevices)
     if ($ready.Count -eq 1) {
         $Device = $ready[0]
     } else {

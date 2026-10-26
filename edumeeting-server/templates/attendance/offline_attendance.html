@@ -1,0 +1,83 @@
+{% extends "attendance/base.html" %}
+{% load static %}
+{% block title %}Asistencia offline · {{ meeting.name }}{% endblock %}
+{% block head %}<script src="{% static 'attendance/export_packages.js' %}" defer></script>{% endblock %}
+{% block nav_meetings %} md-nav__link--active{% endblock %}
+{% block tab_meetings %} md-tabs__link--active{% endblock %}
+{% block breadcrumbs %} <span>›</span> <a href="{% url 'meeting-management' %}">Gestionar reuniones</a> <span>›</span> <span>Asistencia offline</span>{% endblock %}
+{% block toc %}<li><a class="md-nav__link" href="#exportar">Exportar paquete</a></li><li><a class="md-nav__link" href="#importar">Importar resultados</a></li><li><a class="md-nav__link" href="#conflictos">Conflictos</a></li>{% endblock %}
+{% block content %}
+<h1>Asistencia offline · {{ meeting.number }} {{ meeting.name }}</h1>
+<p>Registros de esta reunión: <span class="md-chip md-chip--ok">{{ totals.accepted }} aceptados</span> <span class="md-chip">{{ totals.review }} en revisión</span> <span class="md-chip md-chip--muted">{{ totals.rejected }} rechazados</span></p>
+
+<section class="md-section">
+  <h2 id="exportar">1. Exportar paquete para la app Asistencia</h2>
+  <p>Genera un paquete firmado con los participantes y códigos válidos. Cárgalo en el teléfono para registrar asistencia sin conexión.</p>
+  {% if cross_meeting %}<div class="admonition info"><p>Esta reunión acepta asistentes de otras reuniones; el paquete solo incluirá participantes de las reuniones que tú administras.</p></div>{% endif %}
+  <div class="actions">
+    {% csrf_token %}
+    <button type="button" class="md-button" data-export-url="{% url 'package-export-create' meeting.pk %}">Exportar asistencia</button>
+    <span data-export-status role="status" aria-live="polite"></span>
+  </div>
+</section>
+
+<section class="md-section">
+  <h2 id="importar">2. Importar resultados del dispositivo</h2>
+  <p>Sube el archivo de resultados exportado por la app Asistencia. Reimportar el mismo archivo es seguro: los registros ya importados se omiten.</p>
+  <form method="post" action="{% url 'offline-import' meeting.pk %}" enctype="multipart/form-data" class="md-form">
+    {% csrf_token %}
+    <p><label for="results-file">Archivo de resultados (.attendance-results)</label><input id="results-file" type="file" name="file" accept=".attendance-results,.zip,application/vnd.edumeeting.attendance-results+zip,application/zip" required></p>
+    <button type="submit" class="md-button">Importar resultados</button>
+  </form>
+</section>
+
+<section class="md-section">
+  <h2 id="conflictos">3. Resolver conflictos</h2>
+  <p>Un conflicto aparece cuando el mismo participante se registró más de una vez (por ejemplo, en dos dispositivos). Elige el registro que se conserva; el otro queda rechazado y ambos se guardan en el historial.</p>
+  {% for conflict in pending_conflicts %}
+  <form method="post" action="{% url 'offline-resolve' meeting.pk conflict.pk %}" class="md-form md-card">
+    {% csrf_token %}
+    <h3>{{ conflict.first_record.participant_name_snapshot|default:conflict.first_record.participant.full_name }}</h3>
+    <div class="md-typeset__table"><table>
+      <thead><tr><th>Conservar</th><th>Hora registrada</th><th>Método</th><th>Dispositivo</th><th>Operador</th><th>Importado por</th><th>Notas</th></tr></thead>
+      <tbody>
+      {% for record in conflict.records %}
+      <tr>
+        <td><input type="radio" name="keep_record_id" value="{{ record.pk }}" id="keep-{{ record.pk }}" required aria-label="Conservar este registro"></td>
+        <td><label for="keep-{{ record.pk }}">{{ record.recorded_at|date:"d/m/Y H:i:s" }}</label></td>
+        <td>{{ record.get_method_display }}</td>
+        <td>{{ record.device_id }}</td>
+        <td>{{ record.operator_label|default:"—" }}</td>
+        <td>{{ record.imported_by.username|default:"—" }}</td>
+        <td>{{ record.exception_note|default:"—" }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <p><label for="resolution-{{ conflict.pk }}">Motivo de la resolución</label><input id="resolution-{{ conflict.pk }}" type="text" name="resolution" maxlength="500" required placeholder="Ej.: se verificó con la lista firmada"></p>
+    <button type="submit" class="md-button">Resolver conflicto</button>
+  </form>
+  {% empty %}
+  <div class="admonition success"><p>No hay conflictos pendientes en esta reunión.</p></div>
+  {% endfor %}
+
+  {% if resolved_conflicts %}
+  <h3>Resueltos recientemente</h3>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>Participante</th><th>Registro conservado</th><th>Resuelto por</th><th>Fecha</th><th>Motivo</th></tr></thead>
+    <tbody>
+    {% for conflict in resolved_conflicts %}
+    <tr>
+      <td>{{ conflict.first_record.participant_name_snapshot|default:conflict.first_record.participant.full_name }}</td>
+      <td>{% if conflict.resolved_record_id == conflict.first_record_id %}{{ conflict.first_record.device_id }} · {{ conflict.first_record.recorded_at|date:"d/m/Y H:i" }}{% else %}{{ conflict.second_record.device_id }} · {{ conflict.second_record.recorded_at|date:"d/m/Y H:i" }}{% endif %}</td>
+      <td>{{ conflict.resolved_by.username|default:"—" }}</td>
+      <td>{{ conflict.resolved_at|date:"d/m/Y H:i" }}</td>
+      <td>{{ conflict.resolution }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>
+<p><a class="md-button secondary" href="{% url 'meeting-management' %}">Volver a mis reuniones</a></p>
+{% endblock %}

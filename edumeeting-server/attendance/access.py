@@ -38,6 +38,16 @@ def managed_meetings(user):
     return meetings if user.is_superuser else meetings.filter(administrator=user)
 
 
+def require_meeting_administration(user, meeting):
+    """Offline attendance operations: superuser or the meeting's own administrator, even if inactive."""
+    if not user.is_active:
+        raise PermissionDenied("La cuenta no está activa.")
+    if user.is_superuser:
+        return
+    if not (has_role(user, "ADMINISTRADOR") and meeting.administrator_id == user.pk):
+        raise PermissionDenied("Solo el administrador de esta reunión puede gestionar su asistencia offline.")
+
+
 def require_meeting_role(user, meeting, role):
     if not user.is_active or not meeting.active or not meeting.administrator_id:
         raise PermissionDenied("La reunión no está activa o está pendiente de asignación.")

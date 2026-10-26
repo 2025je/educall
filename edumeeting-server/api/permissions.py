@@ -21,6 +21,15 @@ def role_permission(role, message):
     return HasRole
 
 
+class IsAttendanceAdministrator(BasePermission):
+    """Gate for offline attendance; per-meeting ownership is enforced by the services."""
+
+    message = "Esta operación requiere ser administrador de reuniones."
+
+    def has_permission(self, request, view):
+        return bool(request.user.is_active and has_role(request.user, "ADMINISTRADOR"))
+
+
 class IsSuperuser(BasePermission):
     message = "Esta operación requiere un superusuario."
 

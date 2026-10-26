@@ -342,7 +342,7 @@ class AttendanceServicesTests(TestCase):
         private_setting = base64.b64encode(raw_private).decode("ascii")
         code = issue_attendance_code(self.participant, self.meeting, self.user)
         with override_settings(ATTENDANCE_SIGNING_PRIVATE_KEY=private_setting, ATTENDANCE_SIGNING_PUBLIC_KEY=""):
-            package, contents = export_attendance_package(self.meeting.pk, self.user)
+            package, contents = export_attendance_package(self.meeting.pk, self.owner)
         with zipfile.ZipFile(io.BytesIO(contents)) as bundle:
             manifest_bytes = bundle.read("manifest.json")
             signature = base64.b64decode(bundle.read("manifest.sig"))
@@ -411,12 +411,12 @@ class AttendanceServicesTests(TestCase):
             origin_meeting=self.meeting,
         )
         stable_id = uuid.uuid4()
-        first = import_attendance_results(self.result_archive(package, stable_id), self.user)
-        repeated = import_attendance_results(self.result_archive(package, stable_id), self.user)
+        first = import_attendance_results(self.result_archive(package, stable_id), self.owner)
+        repeated = import_attendance_results(self.result_archive(package, stable_id), self.owner)
         self.assertEqual(first["created"], [str(stable_id)])
         self.assertEqual(repeated["duplicates"], [str(stable_id)])
         other_id = uuid.uuid4()
-        conflict = import_attendance_results(self.result_archive(package, other_id), self.user)
+        conflict = import_attendance_results(self.result_archive(package, other_id), self.owner)
         self.assertEqual(len(conflict["conflicts"]), 1)
         self.assertEqual(AttendanceConflict.objects.count(), 1)
         self.assertEqual(AttendanceRecord.objects.filter(status=AttendanceRecord.Status.REVIEW).count(), 2)
@@ -431,11 +431,11 @@ class AttendanceServicesTests(TestCase):
             package=package, participant=self.participant, participant_name=self.participant.full_name, attendance_code=code,
             code=code.code, origin_meeting=self.meeting,
         )
-        import_attendance_results(self.result_archive(package), self.user)
-        import_attendance_results(self.result_archive(package), self.user)
+        import_attendance_results(self.result_archive(package), self.owner)
+        import_attendance_results(self.result_archive(package), self.owner)
         conflict = AttendanceConflict.objects.get()
         resolve_attendance_conflict(
-            conflict.pk, conflict.first_record_id, self.user, "Se verificó la lista firmada."
+            conflict.pk, conflict.first_record_id, self.owner, "Se verificó la lista firmada."
         )
         conflict.refresh_from_db()
         self.assertEqual(conflict.resolved_record_id, conflict.first_record_id)
@@ -454,6 +454,7 @@ class AttendanceServicesTests(TestCase):
             name="Reunión alternativa",
             starts_at=timezone.now(),
             allow_cross_meeting_attendance=True,
+            administrator=self.owner,
         )
         code = issue_attendance_code(self.participant, self.meeting, self.user)
         private = Ed25519PrivateKey.generate()
@@ -466,13 +467,13 @@ class AttendanceServicesTests(TestCase):
             ATTENDANCE_SIGNING_PRIVATE_KEY=base64.b64encode(raw_private).decode("ascii"),
             ATTENDANCE_SIGNING_PUBLIC_KEY="",
         ):
-            package, contents = export_attendance_package(other_meeting.pk, self.user)
+            package, contents = export_attendance_package(other_meeting.pk, self.owner)
         self.assertEqual(package.participants.get().participant_id, self.participant.pk)
         with zipfile.ZipFile(io.BytesIO(contents)) as bundle:
             roster = json.loads(bundle.read("participants.json"))
         self.assertEqual(roster[0]["code"], code.code)
         self.assertEqual(roster[0]["origin_meeting_id"], str(self.meeting.pk))
-        report = import_attendance_results(self.result_archive(package), self.user)
+        report = import_attendance_results(self.result_archive(package), self.owner)
         self.assertEqual(len(report["created"]), 1)
         record = AttendanceRecord.objects.get(pk=report["created"][0])
         self.assertEqual(record.origin_meeting_id, self.meeting.pk)
@@ -481,7 +482,7 @@ class AttendanceServicesTests(TestCase):
         other_meeting.allow_cross_meeting_attendance = False
         other_meeting.save(update_fields=("allow_cross_meeting_attendance",))
         with self.assertRaises(ValidationError):
-            import_attendance_results(self.result_archive(package), self.user)
+            import_attendance_results(self.result_archive(package), self.owner)
 
 
 @skipUnlessDBFeature("has_select_for_update")

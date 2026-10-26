@@ -30,6 +30,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -112,6 +116,7 @@ private data class ManagedMeeting(
 @Composable
 private fun DialScreen() {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     var serverUrl by remember { mutableStateOf("https://") }
     var username by remember { mutableStateOf("") }
@@ -472,15 +477,39 @@ private fun DialScreen() {
                             OutlinedCard(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                     Text("Iniciar sesión", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                    val canLogin = preferencesLoaded && !busy && username.isNotBlank() && password.isNotBlank()
+                                    val submitLogin = {
+                                        focusManager.clearFocus()
+                                        runRequest {
+                                            val sessionApi = withContext(Dispatchers.IO) { DjangoSessionApi(serverUrl).also { it.login(username, password) } }
+                                            try {
+                                                preferences.setServerUrl(serverUrl)
+                                            } catch (error: IOException) {
+                                                scope.launch {
+                                                    snackbarHostState.showNotice("No se pudo guardar la URL: ${error.message}", AdmonitionKind.Danger)
+                                                }
+                                            }
+                                            api = sessionApi
+                                            password = ""
+                                            passwordVisible = false
+                                            loadMeetings(sessionApi)
+                                            notice = "Sesión iniciada. Las acciones se validan con los permisos de tu cuenta."
+                                        }
+                                    }
                                     OutlinedTextField(
                                         value = serverUrl, onValueChange = { serverUrl = it }, label = { Text("URL HTTPS del servidor") },
                                         enabled = preferencesLoaded && !busy,
                                         leadingIcon = { Icon(Icons.Default.Lock, null) }, singleLine = true,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
                                     OutlinedTextField(
                                         value = username, onValueChange = { username = it }, label = { Text("Usuario") },
-                                        leadingIcon = { Icon(Icons.Default.Person, null) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                                        leadingIcon = { Icon(Icons.Default.Person, null) }, singleLine = true,
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
                                     OutlinedTextField(
                                         value = password, onValueChange = { password = it }, label = { Text("Contraseña") },
@@ -489,27 +518,13 @@ private fun DialScreen() {
                                             Icon(if (passwordVisible) Icons.Default.Lock else Icons.Default.Face, if (passwordVisible) "Ocultar contraseña" else "Mostrar contraseña")
                                         } },
                                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
+                                        keyboardActions = KeyboardActions(onGo = { if (canLogin) submitLogin() else focusManager.clearFocus() }),
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
                                     Button(
-                                        enabled = preferencesLoaded && !busy && username.isNotBlank() && password.isNotBlank(),
-                                        onClick = {
-                                            runRequest {
-                                                val sessionApi = withContext(Dispatchers.IO) { DjangoSessionApi(serverUrl).also { it.login(username, password) } }
-                                                try {
-                                                    preferences.setServerUrl(serverUrl)
-                                                } catch (error: IOException) {
-                                                    scope.launch {
-                                                        snackbarHostState.showNotice("No se pudo guardar la URL: ${error.message}", AdmonitionKind.Danger)
-                                                    }
-                                                }
-                                                api = sessionApi
-                                                password = ""
-                                                passwordVisible = false
-                                                loadMeetings(sessionApi)
-                                                notice = "Sesión iniciada. Las acciones se validan con los permisos de tu cuenta."
-                                            }
-                                        }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                                        enabled = canLogin,
+                                        onClick = { submitLogin() }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                                     ) { ActionLabel(if (busy) "Conectando…" else "Iniciar sesión", Icons.Default.Lock) }
                                     Text("Usa HTTPS con certificado válido. Las credenciales no se guardan en el dispositivo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
@@ -584,13 +599,16 @@ private fun DialScreen() {
                                         label = { Text("Número (1–99, único por día)") }, singleLine = true,
                                         leadingIcon = { Icon(Icons.Default.Info, null) },
                                         supportingText = { Text("Puede repetirse en reuniones de otra fecha.") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                     OutlinedTextField(
                                         value = meetingName, onValueChange = { meetingName = it },
                                         label = { Text("Nombre de la reunión") }, singleLine = true,
                                         leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                     MeetingDateTimePickers(
@@ -602,6 +620,8 @@ private fun DialScreen() {
                                         value = meetingLocation, onValueChange = { meetingLocation = it },
                                         label = { Text("Lugar (opcional)") }, singleLine = true,
                                         leadingIcon = { Icon(Icons.Default.Place, null) },
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                     Button(
@@ -736,7 +756,13 @@ private fun DialScreen() {
                                             supportingText = { Text("Deja vacío para listar participantes") },
                                             leadingIcon = { Icon(Icons.Default.Search, null) },
                                             trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Limpiar búsqueda") } },
-                                            singleLine = true, modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                            keyboardActions = KeyboardActions(onSearch = {
+                                                focusManager.clearFocus()
+                                                if (!busy) searchPeople(1)
+                                            }),
+                                            modifier = Modifier.fillMaxWidth(),
                                         )
                                         Button(enabled = !busy, onClick = { searchPeople(1) }, modifier = Modifier.fillMaxWidth()) { ActionLabel("Buscar participantes", Icons.Default.Search) }
                                         if (templates.isNotEmpty()) {

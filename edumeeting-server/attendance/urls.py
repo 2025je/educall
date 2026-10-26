@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views, workspace
+from . import offline, views, workspace
 
 urlpatterns = [
     path("", workspace.home, name="operator"),
@@ -13,4 +13,10 @@ urlpatterns = [
     path("meetings/", views.meeting_management, name="meeting-management"),
     path("meetings/<uuid:meeting_id>/edit/", views.meeting_edit, name="meeting-edit"),
     path("meetings/<uuid:meeting_id>/toggle/", views.meeting_toggle, name="meeting-toggle"),
+    path("meetings/<uuid:meeting_id>/attendance/", offline.offline_attendance, name="offline-attendance"),
+    path("meetings/<uuid:meeting_id>/attendance/import/", offline.offline_import, name="offline-import"),
+    path(
+        "meetings/<uuid:meeting_id>/attendance/conflicts/<int:conflict_id>/resolve/",
+        offline.offline_resolve, name="offline-resolve",
+    ),
 ]

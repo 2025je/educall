@@ -17,7 +17,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
-from .access import accessible_meetings, require_meeting_role
+from .access import accessible_meetings, require_meeting_administration, require_meeting_role
 
 from .models import (
     AttendanceCode,
@@ -311,9 +311,10 @@ def change_origin_meeting(participant_id, new_meeting_id, user, reason=""):
 
 @transaction.atomic
 def resolve_attendance_conflict(conflict_id, keep_record_id, user, resolution):
-    conflict = AttendanceConflict.objects.select_for_update().select_related("first_record", "second_record").get(
-        pk=conflict_id
-    )
+    conflict = AttendanceConflict.objects.select_for_update().select_related(
+        "first_record", "second_record", "first_record__effective_meeting"
+    ).get(pk=conflict_id)
+    require_meeting_administration(user, conflict.first_record.effective_meeting)
     if conflict.resolved_at:
         raise ValidationError("Este conflicto ya fue resuelto.")
     try:
@@ -481,12 +482,16 @@ def _public_key_bytes(private_key=None):
 @transaction.atomic
 def export_attendance_package(meeting_id, user):
     meeting = Meeting.objects.get(pk=meeting_id)
+    require_meeting_administration(user, meeting)
     private = _private_key()
     code_query = AttendanceCode.objects.filter(valid=True).select_related(
         "participant", "participant__origin_meeting", "meeting"
     ).order_by("sequence")
     if not meeting.allow_cross_meeting_attendance:
         code_query = code_query.filter(meeting=meeting)
+    elif not user.is_superuser:
+        # Un administrador solo exporta participantes de sus propias reuniones.
+        code_query = code_query.filter(meeting__administrator=user)
     candidates = sorted(
         code_query,
         key=lambda code: (
@@ -598,7 +603,7 @@ def _read_results_file(uploaded_file):
 
 
 @transaction.atomic
-def import_attendance_results(uploaded_file, user):
+def import_attendance_results(uploaded_file, user, expected_meeting=None):
     data = _read_results_file(uploaded_file)
     if data.get("schema_version") != 1:
         raise ValidationError("Versión de esquema de resultados no compatible.")
@@ -614,6 +619,9 @@ def import_attendance_results(uploaded_file, user):
         raise ValidationError("El paquete de origen no existe en el servidor.") from exc
     if package.meeting_id != meeting_id:
         raise ValidationError("La reunión no corresponde al paquete de origen.")
+    if expected_meeting is not None and package.meeting_id != expected_meeting.pk:
+        raise ValidationError("El archivo de resultados pertenece a otra reunión.")
+    require_meeting_administration(user, package.meeting)
     records = data.get("records")
     if not isinstance(records, list):
         raise ValidationError("records debe ser una lista.")
@@ -649,6 +657,7 @@ def import_attendance_results(uploaded_file, user):
             raise ValidationError("Un paquete usado por los registros no existe en el servidor.") from exc
         if record_package.meeting_id != effective_id:
             raise ValidationError("El paquete fuente no corresponde a la reunión efectiva.")
+        require_meeting_administration(user, record_package.meeting)
         package_participant = AttendancePackageParticipant.objects.filter(
             package=record_package, participant_id=participant_id
         ).first()
