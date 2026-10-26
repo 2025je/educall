@@ -16,3 +16,4 @@ local.properties
 edumeeting-local-root.crt
 staticfiles/
 artifacts/
+backups/

@@ -26,6 +26,34 @@ services:
       timeout: 5s
       retries: 20
 
+  backup-before-migrate:
+    image: postgres:17-alpine
+    environment: &backup_environment
+      POSTGRES_DB: ${POSTGRES_DB:-edumeeting}
+      POSTGRES_USER: ${POSTGRES_USER:-edumeeting}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configura POSTGRES_PASSWORD en .env}
+      POSTGRES_HOST: db
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_LABEL: antes-de-migrar
+    entrypoint: ["sh", "/backup.sh", "once"]
+    volumes: &backup_volumes
+      - ./docker/backup/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment: *backup_environment
+    entrypoint: ["sh", "/backup.sh", "loop"]
+    volumes: *backup_volumes
+    depends_on:
+      db:
+        condition: service_healthy
+
   web:
     build: ./edumeeting-server
     image: edumeeting-web
@@ -53,8 +81,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      backup-before-migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import http.client; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/accounts/login/'); r=c.getresponse(); raise SystemExit(0 if r.status==200 else 1)"]
+      test: ["CMD", "python", "-c", "import http.client; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/health/'); r=c.getresponse(); raise SystemExit(0 if r.status==200 else 1)"]
       interval: 10s
       timeout: 10s
       start_period: 30s
@@ -73,6 +103,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
     command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME --timeout 5 >/dev/null"]
+      interval: 30s
+      timeout: 20s
+      start_period: 30s
+      retries: 3
     depends_on:
       web:
         condition: service_healthy
