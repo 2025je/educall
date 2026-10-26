@@ -4,17 +4,17 @@ Sistema de llamadas, invitaciones y asistencia compuesto por **tres aplicaciones
 
 | Aplicación | Carpeta | Función |
 |---|---|---|
-| **EduMeeting Server** | [edumeeting-server](./edumeeting-server/) | Sitio web Django, administración, API y base de datos central. |
-| **EduMeeting Llamadas** | [edumeeting-llamadas](./edumeeting-llamadas/) | App Android para operadores: llamadas, resultados e invitaciones por WhatsApp. Requiere conexión HTTPS al servidor. |
-| **EduMeeting Asistencia** | [edumeeting-asistencia](./edumeeting-asistencia/) | App Android para asistencia offline mediante QR o búsqueda, con importación y exportación de archivos. |
+| **EduMeeting Server** | [edumeeting-server](./edumeeting-server/) | Sitio web Django (vistas basadas en clases), administración, API y base de datos central. |
+| **EduMeeting Llamadas** | [edumeeting-llamadas](./edumeeting-llamadas/) | App Android para operadores (llamadas, resultados e invitaciones por WhatsApp) y para el administrador de la reunión (PIN de asistencia, exportación del paquete, combinación de resultados y conflictos). Requiere conexión HTTPS al servidor. |
+| **EduMeeting Asistencia** | [edumeeting-asistencia](./edumeeting-asistencia/) | App Android para asistencia offline mediante QR o búsqueda. Nunca se conecta al servidor: cada persona se identifica con su nombre y el PIN de la reunión, y los datos viajan por archivos. |
 
 ```mermaid
 flowchart LR
   Admin[Administración web] --> Server[EduMeeting Server / PostgreSQL]
   Dial[EduMeeting Llamadas] -->|API autenticada por HTTPS| Server
-  Server -->|Paquete firmado .attendance| Registro[EduMeeting Asistencia / Room]
-  Registro -->|Archivo .attendance-results| Server
-  Server --> Reportes[Reportes y revisión de conflictos]
+  Server -->|Paquete firmado .attendance con PIN| Registro[EduMeeting Asistencia / Room, uno o varios teléfonos]
+  Registro -->|Varios .attendance-results, uno por teléfono| Server
+  Server --> Reportes[Resultados combinados, registros por persona y conflictos]
 ```
 
 ## Inicio con Docker Compose
@@ -187,7 +187,7 @@ La interfaz está inspirada en [Zensical](https://zensical.org/contributing/): b
 - Los campos de texto y áreas de texto de los formularios web (incluido `/admin/`) convierten la entrada a **MAYÚSCULAS** al escribir, pegar y enviar. Se exceptúan contraseñas, correos, nombres de usuario y valores técnicos (ocultos, fechas, números, URL y tipo interno de mensaje). Se conserva la selección del cursor y las variables `{{nombre}}` de las plantillas. La conversión cambia el valor enviado, no es solo visual; no modifica registros existentes por sí sola ni las entradas de las aplicaciones Android o API.
 - En el formulario **Usuarios y grupos** hay una excepción específica: **Usuario** se convierte a MAYÚSCULAS; **Nombre** y **Apellidos** conservan la escritura introducida y no se solicita correo electrónico. Las contraseñas tampoco se transforman. El inicio de sesión conserva el nombre de usuario escrito para mantener el acceso a cuentas anteriores.
 - En **Usuarios y grupos**, los grupos se muestran como **Administrador de reuniones**, **Registrador de participantes** y **Operador de llamadas**, tanto en el formulario como en el listado. Sus identificadores internos siguen siendo `ADMINISTRADOR`, `REGISTRAR` y `OPERADOR`, sin cambiar permisos ni asignaciones. Los grupos adicionales conservan su nombre.
-- EduMeeting Llamadas usa esos mismos nombres en sus roles y en la asignación de equipos. EduMeeting Asistencia no utiliza grupos de cuentas: su «Operador» es un identificador local de quien registra asistencias, no el rol de llamadas.
+- EduMeeting Llamadas usa esos mismos nombres en sus roles y en la asignación de equipos. EduMeeting Asistencia no utiliza cuentas ni grupos: cada persona se identifica con su nombre y el PIN de la reunión, y ese nombre queda como «Registró» en cada asistencia.
 - Las consultas de EduMeeting Llamadas pasan por Retrofit y OkHttp, con cookies de sesión aisladas por conexión, CSRF de Django, selección de reunión y HTTPS obligatorio. Se mantienen los contratos de la API y los errores se muestran explícitamente; una respuesta exitosa que no sea un objeto JSON se rechaza. La compilación Docker de Llamadas ejecuta sus pruebas de red con MockWebServer antes de generar el APK. Asistencia sigue sin conexión y no necesita cliente Retrofit.
 - Ambas apps usan **DataStore** para preferencias, migrando el tema que antes estaba en SharedPreferences. Llamadas recuerda también la URL del último inicio de sesión correcto, pero no contraseñas ni sesiones. Asistencia ya utiliza **Room** para reuniones, participantes, asistencias e historial local y **DataStore** para reunión seleccionada e identificación del dispositivo/registrador. No se añade Room a Llamadas porque sus datos siguen en el servidor, ni WorkManager: no hay sincronización automática ni trabajos diferidos; reintentar llamadas o registros en segundo plano podría duplicar operaciones o usar asignaciones vencidas.
 - Plantilla base: `edumeeting-server/templates/attendance/base.html`; estilos: `attendance/static/attendance/app.css`; tema: `theme.js`.
@@ -368,7 +368,7 @@ Para descargar los APK:
 2. En **Artifacts**, descarga `edumeeting-llamadas-debug` y `edumeeting-asistencia-debug`.
 3. Descomprime los ZIP para obtener los archivos `.apk`. Los artefactos se conservan **14 días**.
 
-Llamadas ejecuta sus pruebas unitarias antes de generar el APK. El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
+Ambas apps ejecutan sus pruebas unitarias antes de generar el APK (en Asistencia, entre otras, la verificación del PIN con un hash real de Django). El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
 
 Son APK **debug**, no versiones de producción. Cada job utiliza una firma debug temporal: no se garantiza la misma firma entre ejecuciones ni respecto a los APK locales. Android puede exigir desinstalar una versión anterior para instalar estos APK, lo que elimina los datos locales; exporta primero los datos de Asistencia. Para actualizaciones persistentes o distribución de producción se necesita un almacén de firma estable y protegido, que este workflow no configura.
 
@@ -414,8 +414,8 @@ EduMeeting Llamadas y EduMeeting Asistencia siguen el estilo de [Zensical](https
 
 - Barra superior con el título de la pantalla y, debajo, la reunión activa (en Llamadas también el usuario). Fondo blanco en tema claro y #0B0C0F en oscuro, acento índigo.
 - Menú lateral ☰ con iconos y pantallas separadas; la opción activa se resalta como píldora. El botón Atrás vuelve a Inicio antes de salir.
-  - **Llamadas:** Inicio, Reuniones, Llamadas, Buscar, Registrar, Asignaciones y estadísticas, Gestionar reuniones (según tus roles), tema y cerrar sesión.
-  - **Asistencia:** Inicio, Importar paquete, Reunión, Operador, Registrar asistencia (búsqueda y escáner QR) y Exportar.
+  - **Llamadas:** Inicio, Reuniones, Llamadas, Buscar, Registrar, Asignaciones y estadísticas (incluye **Asistencia offline**: PIN, exportar paquete, importar y combinar resultados de varios teléfonos y conflictos), Gestionar reuniones (según tus roles), tema y cerrar sesión.
+  - **Asistencia:** Inicio, Importar paquete, Reunión, Identificación (nombre y PIN), Registrar asistencia (búsqueda y escáner QR) y Exportar.
 - Inicio muestra tarjetas de acciones rápidas (icono, título, descripción y «→ acción») y contadores; los botones tienen al menos 48 dp de alto.
 - Avisos tipo *admonition* con borde de color: información, advertencia, error y ejemplo (vista previa del código).
 - Los resultados de cada acción también aparecen como aviso flotante en la parte inferior, visible aunque la pantalla esté desplazada. Los errores y advertencias permanecen hasta pulsar **Cerrar**; los mensajes de éxito desaparecen solos.
@@ -542,7 +542,9 @@ Las actualizaciones usan `adb install -r`, por lo que se conservan los datos y l
 
 Para distribuir fuera de pruebas, usa **Build → Generate Signed App Bundle or APK**, crea o selecciona tu almacén de claves y elige APK o AAB según el canal. Conserva ese almacén y su contraseña fuera del repositorio: los necesitas para publicar actualizaciones. No distribuyas el APK debug como versión de producción.
 
-Se verificó la compilación Docker de ambas apps y la firma de sus APK debug. Asistencia se compiló para esta comprobación con una clave pública temporal: recompílalo con la clave de tu servidor antes de importar paquetes reales. Los APK generados quedan fuera de Git. Siguen pendientes las pruebas funcionales en un teléfono o emulador (cámara, QR, llamadas, WhatsApp y persistencia).
+Se verificó la compilación Docker de ambas apps, sus pruebas unitarias y la firma de sus APK debug, y ambas se instalaron en un teléfono mediante `scripts\install-apks.ps1`. Los APK generados quedan fuera de Git. Siguen pendientes pruebas funcionales completas en el dispositivo (cámara, QR, llamadas, WhatsApp y el flujo PIN → registro → combinación con varios teléfonos).
+
+Al actualizar Asistencia, Room migra la base local a la versión 2 (columna del PIN) sin borrar las asistencias. Los paquetes importados antes de esta versión no traen PIN: vuelve a exportarlos desde el servidor e impórtalos de nuevo.
 
 ## Uso offline de EduMeeting Asistencia
 
@@ -615,7 +617,9 @@ El puerto del Compose está ligado a `127.0.0.1`: no expone la aplicación a tod
 
 ## API y pruebas
 
-La API vive bajo `/api/v1/` y está implementada con **Django REST Framework** en la app Django `api` (`edumeeting-server/api/`): vistas `APIView`, serializadores para validar entradas y salidas, permisos por grupo y por asignación a la reunión. La app `attendance` conserva los modelos, la lógica de dominio compartida y las vistas web. Las URL y el formato de respuesta no cambiaron, por lo que EduMeeting Llamadas funciona sin modificaciones.
+La API vive bajo `/api/v1/` y está implementada con **Django REST Framework** en la app Django `api` (`edumeeting-server/api/`): vistas `APIView`, serializadores para validar entradas y salidas, permisos por grupo y por asignación a la reunión. La app `attendance` conserva los modelos, la lógica de dominio compartida y las vistas web.
+
+Las vistas web también son **vistas basadas en clases** (`View`, `FormView`, `UpdateView`) con mixins de acceso: `LoginRequiredMixin` redirige al login sin sesión, `SuperuserRequiredMixin` limita la gestión de usuarios al superusuario, `PermissionRequiredMixin` protege la creación de reuniones y `http_method_names` responde 405 a métodos no permitidos. Están en `attendance/views.py` (usuarios y reuniones), `attendance/workspace.py` (inicio, reunión activa, asignaciones y registro) y `attendance/offline.py` (PIN, importación combinada y conflictos).
 
 - Autenticación por sesión Django (`SessionAuthentication`); los POST requieren el encabezado CSRF. EduMeeting Llamadas usa las mismas reglas que el sitio web.
 - Sin sesión, la API responde **401** JSON (antes redirigía al login con 302).
@@ -661,6 +665,10 @@ python manage.py makemigrations --check --dry-run
 python manage.py test attendance api
 ```
 
-Las pruebas cubren asignación, permisos, llamadas, consentimiento, códigos, paquetes firmados, estados de WhatsApp e importación con conflictos. Con SQLite se omiten las pruebas que necesitan bloqueo de filas; usa PostgreSQL mediante Compose para ejecutarlas. Los eventos en tiempo real usan SSE y una tabla persistente, no Django Channels/WebSockets.
+Las pruebas cubren asignación, permisos, vistas web y sus restricciones de acceso y método, llamadas, consentimiento, códigos, paquetes firmados con PIN, importación combinada de varios archivos, registros por persona, estados de WhatsApp, conflictos, JWT, WebSocket y auditoría. Con SQLite se omiten las pruebas que necesitan bloqueo de filas; usa PostgreSQL mediante Compose para ejecutarlas. Los eventos en tiempo real se guardan en una tabla persistente y se publican por WebSocket (Django Channels + Redis) con SSE como alternativa.
 
-Validación realizada: construcción y arranque de Compose con servicios saludables, inicio de sesión HTTP 200, migraciones sin cambios pendientes y **22 pruebas aprobadas en PostgreSQL, sin omisiones**. También se generaron ambos APK con Docker y se verificaron sus firmas. Esto no sustituye las pruebas Android en dispositivo pendientes.
+Validación realizada: construcción y arranque de Compose con servicios saludables, migraciones aplicadas sin cambios pendientes, esquema OpenAPI válido y **165 pruebas aprobadas en PostgreSQL (2 omitidas)**:
+
+```powershell
+docker compose -f compose.yaml -f compose.local-https.yaml exec web python manage.py test --noinput
+```
