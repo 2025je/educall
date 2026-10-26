@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from attendance.models import Meeting
+from attendance.testing import create_meeting
 
 
 class RestFrameworkContractTests(TestCase):
@@ -14,7 +15,7 @@ class RestFrameworkContractTests(TestCase):
         self.admin = get_user_model().objects.create_user("admin")
         self.admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.superuser = get_user_model().objects.create_superuser("root", password="unused-password-123")
-        self.meeting = Meeting.objects.create(
+        self.meeting = create_meeting(
             number=1, name="Reunión", starts_at=timezone.now(), administrator=self.admin,
         )
 
@@ -28,13 +29,13 @@ class RestFrameworkContractTests(TestCase):
     def test_errors_use_single_error_message(self):
         self.client.force_login(self.admin)
         response = self.client.post(
-            reverse("meetings"), json.dumps({"number": 100, "name": "", "starts_at": "x"}),
+            reverse("meetings"), json.dumps({"name": "", "schedules": [{"starts_at": "x"}]}),
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
         message = response.json()["error"]
         self.assertIsInstance(message, str)
-        self.assertIn("Número de reunión", message)
+        self.assertIn("Horarios", message)
         self.assertIn("Nombre", message)
 
     def test_permission_message_from_domain_is_preserved(self):
@@ -57,14 +58,15 @@ class RestFrameworkContractTests(TestCase):
 
     def test_form_encoded_bodies_are_rejected(self):
         self.client.force_login(self.admin)
-        response = self.client.post(reverse("meetings"), {"number": 2, "name": "x", "starts_at": "2026-01-01 10:00"})
+        response = self.client.post(reverse("meetings"), {"name": "Formulario", "schedules": "2026-01-01 10:00"})
         self.assertEqual(response.status_code, 415)
-        self.assertFalse(Meeting.objects.filter(number=2).exists())
+        self.assertFalse(Meeting.objects.filter(name="Formulario").exists())
 
     def test_meeting_payload_includes_local_start(self):
         self.client.force_login(self.admin)
         meeting = self.client.get(reverse("meetings")).json()["meetings"][0]
         self.assertEqual(
-            meeting["starts_at_local"], timezone.localtime(self.meeting.starts_at).strftime("%Y-%m-%d %H:%M"),
+            meeting["schedules"][0]["starts_at_local"],
+            timezone.localtime(self.meeting.schedules.get().starts_at).strftime("%Y-%m-%d %H:%M"),
         )
         self.assertTrue(meeting["active"])

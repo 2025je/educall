@@ -1,0 +1,31 @@
+<fieldset class="md-fieldset" data-schedules data-prefix="{{ schedules.prefix }}">
+  <legend>Horarios</legend>
+  <p class="md-meta">Agrega uno o varios horarios. El operador asigna a cada invitado el horario al que asistirá. Si un horario no indica lugar se usa el de la reunión.</p>
+  {{ schedules.management_form }}
+  {% for error in schedules.non_form_errors %}<p class="errorlist">{{ error }}</p>{% endfor %}
+  <div data-schedule-rows>
+  {% for schedule_form in schedules %}
+    <div class="schedule-row" data-schedule-row>
+      {{ schedule_form.id }}
+      {% for error in schedule_form.non_field_errors %}<p class="errorlist">{{ error }}</p>{% endfor %}
+      <p>{{ schedule_form.starts_date.label_tag }} {{ schedule_form.starts_date }}{{ schedule_form.starts_date.errors }}</p>
+      <p>{{ schedule_form.starts_time.label_tag }} {{ schedule_form.starts_time }}{{ schedule_form.starts_time.errors }}</p>
+      <p>{{ schedule_form.location.label_tag }} {{ schedule_form.location }}{{ schedule_form.location.errors }}</p>
+      {% if schedule_form.instance.pk %}
+      <p>{{ schedule_form.DELETE }} {{ schedule_form.DELETE.label_tag }}{% with count=schedule_form.instance.participants.count %}{% if count %} <span class="md-chip md-chip--muted">{{ count }} participante{{ count|pluralize }}</span>{% endif %}{% endwith %}</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+  </div>
+  <template data-schedule-template>
+    <div class="schedule-row" data-schedule-row>
+      {{ schedules.empty_form.id }}
+      <p>{{ schedules.empty_form.starts_date.label_tag }} {{ schedules.empty_form.starts_date }}</p>
+      <p>{{ schedules.empty_form.starts_time.label_tag }} {{ schedules.empty_form.starts_time }}</p>
+      <p>{{ schedules.empty_form.location.label_tag }} {{ schedules.empty_form.location }}</p>
+      <p><button type="button" class="md-button md-button--small secondary" data-remove-schedule>Quitar</button></p>
+    </div>
+  </template>
+  <button type="button" class="md-button md-button--small secondary" data-add-schedule>Agregar horario</button>
+</fieldset>
+<div class="admonition info"><p>Código de asistencia: <code>INICIALES-SSSS</code>, por ejemplo <code>JU-0001</code>. Las iniciales son del operador que registra la aceptación y la secuencia es propia de cada operador.</p></div>

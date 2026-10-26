@@ -22,7 +22,7 @@ data class AttendanceDisplay(
 
 @Dao
 interface AttendanceDao {
-    @Query("SELECT * FROM LocalMeeting ORDER BY startsAt, number")
+    @Query("SELECT * FROM LocalMeeting ORDER BY schedules, name")
     fun meetings(): Flow<List<LocalMeeting>>
 
     @Query("SELECT * FROM LocalMeeting WHERE id = :id")

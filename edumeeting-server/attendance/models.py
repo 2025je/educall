@@ -8,27 +8,21 @@ from django.db import models
 from django.utils import timezone
 
 
-def meeting_local_day(starts_at):
-    if isinstance(starts_at, str):
-        from django.utils.dateparse import parse_datetime
-
-        starts_at = parse_datetime(starts_at)
-    if timezone.is_naive(starts_at):
-        starts_at = timezone.make_aware(starts_at)
-    return timezone.localtime(starts_at).date()
+def format_attendance_code(initials, sequence):
+    return f"{initials}-{sequence:04d}"
 
 
-def format_attendance_code(initials, starts_on, number, sequence):
-    return f"{initials}-{starts_on:%d%m%y}-{number:02d}-{sequence:03d}"
+# Códigos emitidos antes de los horarios: INICIALES-DDMMAA-NN-SSS o INICIALES-NN-SSS.
+LEGACY_CODE_PATTERN = re.compile(r"^[A-Z]{2}-(?:[0-9]{6}-)?[0-9]{2}-[0-9]{3}$")
 
 
 class Meeting(models.Model):
+    class CallPhase(models.TextChoices):
+        INVITATION = "invitation", "Fase 1 · Invitación"
+        CONFIRMATION = "confirmation", "Fase 2 · Confirmación"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    number = models.PositiveSmallIntegerField(validators=(MinValueValidator(1), MaxValueValidator(99)))
     name = models.CharField(max_length=160)
-    starts_at = models.DateTimeField()
-    # Fecha local de starts_at; el número de reunión solo se repite en días distintos.
-    starts_on = models.DateField(editable=False)
     location = models.CharField(max_length=240, blank=True)
     active = models.BooleanField(default=True)
     administrator = models.ForeignKey(
@@ -47,7 +41,31 @@ class Meeting(models.Model):
     allow_cross_meeting_attendance = models.BooleanField(default=False)
     # Hash PBKDF2 del PIN que exige la app Asistencia; viaja firmado en el paquete offline.
     attendance_pin_hash = models.CharField(max_length=160, blank=True, editable=False)
-    next_code_sequence = models.PositiveIntegerField(default=1)
+    # Reglas de la cola de llamadas, configurables por el administrador de la reunión.
+    call_lease_minutes = models.PositiveSmallIntegerField(
+        "Minutos de reserva por llamada", default=10, validators=(MinValueValidator(1), MaxValueValidator(60)),
+        help_text="Tiempo que el operador tiene para registrar el resultado antes de que la llamada vuelva a la cola (1–60).",
+    )
+    retry_delay_minutes = models.PositiveIntegerField(
+        "Minutos entre reintentos", default=15, validators=(MinValueValidator(1), MaxValueValidator(1440)),
+        help_text="Espera tras «No contesta» antes de volver a ofrecer la llamada (1–1440).",
+    )
+    max_call_attempts = models.PositiveSmallIntegerField(
+        "Máximo de intentos sin respuesta", default=3, validators=(MinValueValidator(1), MaxValueValidator(20)),
+        help_text="Al llegar a este número de «No contesta» la llamada pasa a «Sin respuesta» y deja la cola (1–20).",
+    )
+    follow_up_delay_minutes = models.PositiveIntegerField(
+        "Minutos antes del seguimiento", default=60, validators=(MinValueValidator(0), MaxValueValidator(10080)),
+        help_text="Espera por defecto tras «Seguimiento» si el operador no indica una hora (0–10080, 7 días).",
+    )
+    prioritize_follow_ups = models.BooleanField(
+        "Priorizar seguimientos", default=True,
+        help_text="Ofrece primero los seguimientos vencidos y después las llamadas pendientes.",
+    )
+    call_phase = models.CharField(
+        "Fase de llamadas", max_length=16, choices=CallPhase.choices, default=CallPhase.INVITATION,
+        help_text="Fase 1: invitar y asignar horario. Fase 2: confirmar asistencia y volver a llamar a quienes no respondieron.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_meetings"
     )
@@ -57,50 +75,46 @@ class Meeting(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ("starts_at", "number")
+        ordering = ("name", "created_at")
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def first_starts_at(self):
+        first = self.schedules.first()
+        return first.starts_at if first else None
+
+
+class MeetingSchedule(models.Model):
+    """Un horario de la reunión; el operador asigna a cada participante el suyo."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    meeting = models.ForeignKey(Meeting, on_delete=models.CASCADE, related_name="schedules")
+    starts_at = models.DateTimeField("Fecha y hora")
+    location = models.CharField(
+        "Lugar del horario", max_length=240, blank=True, help_text="Opcional; si se deja vacío se usa el de la reunión.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("starts_at", "created_at")
         constraints = [
-            models.CheckConstraint(condition=models.Q(number__gte=1, number__lte=99), name="meeting_number_two_digits"),
             models.UniqueConstraint(
-                fields=("number", "starts_on"), name="unique_meeting_number_per_day",
-                violation_error_message="Ya existe una reunión con ese número en esa fecha.",
+                fields=("meeting", "starts_at"), name="unique_schedule_per_meeting_time",
+                violation_error_message="La reunión ya tiene un horario en esa fecha y hora.",
             ),
         ]
 
     def __str__(self):
-        return f"{self.number:02d} · {self.name}"
+        return self.label()
 
-    def save(self, *args, **kwargs):
-        if self.starts_at:
-            self.starts_on = meeting_local_day(self.starts_at)
-            update_fields = kwargs.get("update_fields")
-            if update_fields is not None and "starts_at" in update_fields:
-                kwargs["update_fields"] = {*update_fields, "starts_on"}
-        super().save(*args, **kwargs)
+    def effective_location(self):
+        return self.location or self.meeting.location
 
-    @staticmethod
-    def schedule_errors(number, starts_at, instance=None):
-        """Errores de número/fecha: único por día y fijo si ya hay códigos emitidos."""
-        if number is None or starts_at is None:
-            return {}
-        day = meeting_local_day(starts_at)
-        errors = {}
-        duplicates = Meeting.objects.filter(number=number, starts_on=day)
-        if instance is not None and instance.pk:
-            duplicates = duplicates.exclude(pk=instance.pk)
-        if duplicates.exists():
-            errors["number"] = f"Ya existe una reunión {number:02d} el {day:%d/%m/%Y}. Usa otro número o fecha."
-        if instance is not None and instance.pk:
-            original = Meeting.objects.filter(pk=instance.pk).values("number", "starts_on").first()
-            if original and (original["number"], original["starts_on"]) != (number, day) and \
-                    AttendanceCode.objects.filter(meeting_id=instance.pk).exists():
-                errors["starts_at"] = (
-                    "Ya se emitieron códigos de asistencia con el número y la fecha actuales; "
-                    "solo puedes cambiar la hora, el nombre o el lugar."
-                )
-        return errors
-
-    def attendance_code(self, initials, sequence):
-        return format_attendance_code(initials, self.starts_on, self.number, sequence)
+    def label(self):
+        text = timezone.localtime(self.starts_at).strftime("%d/%m/%Y %H:%M")
+        return f"{text} · {self.location}" if self.location else text
 
 
 class OperatorProfile(models.Model):
@@ -110,6 +124,8 @@ class OperatorProfile(models.Model):
         unique=True,
         validators=[RegexValidator(r"^[A-Z]{2}$", "Use exactamente dos letras mayúsculas.")],
     )
+    # Secuencia propia del operador: sus códigos INICIALES-SSSS son únicos en todas las reuniones.
+    next_code_sequence = models.PositiveIntegerField(default=1, editable=False)
 
     class Meta:
         constraints = [
@@ -134,16 +150,27 @@ class Participant(models.Model):
         ACCEPTED = "accepted", "Aceptó"
         DECLINED = "declined", "Rechazó"
 
+    class AttendanceConfirmation(models.TextChoices):
+        PENDING = "pending", "Sin confirmar"
+        CONFIRMED = "confirmed", "Confirmó asistencia"
+        WILL_NOT_ATTEND = "will_not_attend", "No asistirá"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     full_name = models.CharField(max_length=200)
     phone = models.CharField(max_length=32, blank=True)
     origin_meeting = models.ForeignKey(
         Meeting, null=True, blank=True, on_delete=models.PROTECT, related_name="origin_participants"
     )
+    schedule = models.ForeignKey(
+        MeetingSchedule, null=True, blank=True, on_delete=models.PROTECT, related_name="participants",
+    )
     contact_authorized = models.BooleanField(default=False)
     do_not_contact = models.BooleanField(default=False)
     invitation_status = models.CharField(
         max_length=16, choices=InvitationStatus.choices, default=InvitationStatus.NOT_INVITED
+    )
+    attendance_confirmation = models.CharField(
+        max_length=16, choices=AttendanceConfirmation.choices, default=AttendanceConfirmation.PENDING
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="created_participants"
@@ -170,11 +197,19 @@ class CallTask(models.Model):
         FOLLOW_UP = "follow_up", "Seguimiento"
         COMPLETED = "completed", "Finalizada"
         SUPPRESSED = "suppressed", "Excluida"
+        EXHAUSTED = "exhausted", "Sin respuesta"
+
+    class Purpose(models.TextChoices):
+        INVITATION = "invitation", "Invitación"
+        CONFIRMATION = "confirmation", "Confirmación"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="call_tasks")
     meeting = models.ForeignKey(Meeting, on_delete=models.PROTECT, related_name="call_tasks")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    purpose = models.CharField(max_length=16, choices=Purpose.choices, default=Purpose.INVITATION)
+    # Al pasar a la fase 2 se reinicia el contador: solo cuentan los «No contesta» posteriores.
+    attempts_reset_at = models.DateTimeField(null=True, blank=True)
     assignee = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_call_tasks"
     )
@@ -208,6 +243,8 @@ class CallAttempt(models.Model):
         FOLLOW_UP = "follow_up", "Requiere seguimiento"
         INBOUND = "inbound", "Contacto entrante"
         OTHER = "other", "Otro"
+        CONFIRMED = "confirmed", "Asistencia confirmada"
+        WILL_NOT_ATTEND = "will_not_attend", "No asistirá"
 
     task = models.ForeignKey(CallTask, on_delete=models.PROTECT, related_name="attempts")
     participant = models.ForeignKey(Participant, on_delete=models.PROTECT, related_name="call_attempts")
@@ -247,14 +284,13 @@ class AttendanceCode(models.Model):
             models.UniqueConstraint(
                 fields=("participant", "meeting"), condition=models.Q(valid=True), name="one_valid_code_per_meeting"
             ),
-            models.UniqueConstraint(fields=("meeting", "sequence"), name="unique_meeting_code_sequence"),
         ]
-        ordering = ("meeting", "sequence")
+        ordering = ("meeting", "generated_at")
 
     def clean(self):
-        components_match = self.code == self.meeting.attendance_code(self.operator_initials, self.sequence)
-        legacy_match = self.code == f"{self.operator_initials}-{self.meeting.number:02d}-{self.sequence:03d}"
-        if not (components_match or legacy_match):
+        if self.code != format_attendance_code(self.operator_initials, self.sequence) and not (
+            LEGACY_CODE_PATTERN.match(self.code) and self.code.startswith(f"{self.operator_initials}-")
+        ):
             raise ValidationError({"code": "El código no coincide con sus componentes."})
 
 

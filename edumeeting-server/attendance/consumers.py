@@ -3,7 +3,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 
-from .access import require_meeting_role
+from .access import require_realtime_access
 from .models import Meeting
 
 
@@ -18,7 +18,7 @@ class AttendanceConsumer(AsyncJsonWebsocketConsumer):
         if user is None or meeting is None or not user.has_perm("attendance.view_realtimeevent"):
             return False
         try:
-            require_meeting_role(user, meeting, "OPERADOR")
+            require_realtime_access(user, meeting)
         except PermissionDenied:
             return False
         return True

@@ -11,6 +11,7 @@ from .models import (
     CallAssignment,
     CallTask,
     Meeting,
+    MeetingSchedule,
     MessageLog,
     MessageCampaign,
     MessageTemplate,
@@ -34,11 +35,27 @@ class MeetingDataReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
+class MeetingScheduleInline(admin.TabularInline):
+    model = MeetingSchedule
+    extra = 0
+    fields = ("starts_at", "location")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Meeting)
 class MeetingAdmin(MeetingDataReadOnlyAdmin):
-    list_display = ("number", "name", "administrator", "starts_at", "active", "allow_cross_meeting_attendance")
+    list_display = ("name", "administrator", "first_starts_at", "active", "allow_cross_meeting_attendance")
     list_filter = ("active", "allow_cross_meeting_attendance")
     search_fields = ("name", "location")
+    inlines = (MeetingScheduleInline,)
 
 
 @admin.register(Participant)

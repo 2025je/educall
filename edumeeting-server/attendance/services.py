@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
-from django.db.models import Q
+from django.db.models import Case, Count, Exists, F, IntegerField, Min, OuterRef, Q, Value, When
 from django.utils import timezone
 from .access import accessible_meetings, require_meeting_administration, require_meeting_role
 
@@ -30,12 +30,15 @@ from .models import (
     CallAttempt,
     CallTask,
     Meeting,
+    MeetingSchedule,
     MessageCampaign,
     MessageLog,
     MessageTemplate,
+    OperatorProfile,
     Participant,
     ParticipantMeetingChange,
     RealtimeEvent,
+    format_attendance_code,
 )
 
 
@@ -59,8 +62,106 @@ def _operator_initials(user):
         raise PermissionDenied("El usuario no tiene iniciales de operador configuradas.") from exc
 
 
+OPEN_CALL_STATUSES = (
+    CallTask.Status.PENDING,
+    CallTask.Status.ASSIGNED,
+    CallTask.Status.IN_PROGRESS,
+    CallTask.Status.FOLLOW_UP,
+)
+# Límite para agendar un seguimiento manual desde la app o la web.
+MAX_FOLLOW_UP_DAYS = 30
+
+
+# Tipos de número que el operador puede pedir a la cola durante la fase 2.
+QUEUE_TYPE_CONFIRM = "confirm"
+QUEUE_TYPE_NEVER_ANSWERED = "never_answered"
+QUEUE_TYPE_NEW = "new"
+QUEUE_TYPE_FOLLOW_UP = "follow_up"
+QUEUE_TYPES = {
+    QUEUE_TYPE_CONFIRM: "Confirmar asistencia",
+    QUEUE_TYPE_NEVER_ANSWERED: "Nunca respondieron",
+    QUEUE_TYPE_NEW: "Nuevos sin llamar",
+    QUEUE_TYPE_FOLLOW_UP: "Seguimientos",
+}
+INVITATION_OUTCOMES = frozenset((
+    CallAttempt.Outcome.NO_ANSWER, CallAttempt.Outcome.CONTACTED, CallAttempt.Outcome.ACCEPTED,
+    CallAttempt.Outcome.DECLINED, CallAttempt.Outcome.DO_NOT_CONTACT, CallAttempt.Outcome.FOLLOW_UP,
+    CallAttempt.Outcome.OTHER,
+))
+CONFIRMATION_OUTCOMES = frozenset((
+    CallAttempt.Outcome.CONFIRMED, CallAttempt.Outcome.WILL_NOT_ATTEND,
+    CallAttempt.Outcome.NO_ANSWER, CallAttempt.Outcome.FOLLOW_UP,
+))
+
+
+def _callable_tasks(meeting):
+    return CallTask.objects.filter(
+        meeting=meeting, participant__origin_meeting=meeting,
+        participant__do_not_contact=False, participant__contact_authorized=True,
+    )
+
+
+def _counted_no_answer():
+    """Filter for the «No contesta» attempts that count toward the limit (after the phase-2 reset)."""
+    return Q(attempts__outcome=CallAttempt.Outcome.NO_ANSWER) & (
+        Q(attempts_reset_at=None) | Q(attempts__created_at__gt=F("attempts_reset_at"))
+    )
+
+
+def unanswered_attempts(task):
+    attempts = task.attempts.filter(outcome=CallAttempt.Outcome.NO_ANSWER)
+    if task.attempts_reset_at:
+        attempts = attempts.filter(created_at__gt=task.attempts_reset_at)
+    return attempts.count()
+
+
+def normalize_queue_types(types):
+    if types in (None, "", []):
+        return tuple(QUEUE_TYPES)
+    if isinstance(types, str):
+        types = [item for item in types.split(",") if item]
+    if not isinstance(types, (list, tuple)) or not types or any(item not in QUEUE_TYPES for item in types):
+        raise ValidationError({"types": f"Tipos de cola válidos: {', '.join(QUEUE_TYPES)}."})
+    return tuple(dict.fromkeys(types))
+
+
+def _queue_filter(meeting, types):
+    """Restrict a task queryset to what the meeting's phase (and the operator's selection) allows."""
+    if meeting.call_phase != Meeting.CallPhase.CONFIRMATION:
+        return Q(purpose=CallTask.Purpose.INVITATION)
+    has_no_answer = Exists(CallAttempt.objects.filter(task=OuterRef("pk"), outcome=CallAttempt.Outcome.NO_ANSWER))
+    not_follow_up = ~Q(status=CallTask.Status.FOLLOW_UP)
+    options = {
+        QUEUE_TYPE_CONFIRM: Q(purpose=CallTask.Purpose.CONFIRMATION) & not_follow_up,
+        QUEUE_TYPE_NEVER_ANSWERED: Q(purpose=CallTask.Purpose.INVITATION) & has_no_answer & not_follow_up,
+        QUEUE_TYPE_NEW: Q(purpose=CallTask.Purpose.INVITATION) & ~has_no_answer & not_follow_up,
+        QUEUE_TYPE_FOLLOW_UP: Q(status=CallTask.Status.FOLLOW_UP),
+    }
+    condition = Q(pk__in=[])
+    for item in normalize_queue_types(types):
+        condition |= options[item]
+    return condition
+
+
+def task_queue_type(task):
+    if task.status == CallTask.Status.FOLLOW_UP:
+        return QUEUE_TYPE_FOLLOW_UP
+    if task.purpose == CallTask.Purpose.CONFIRMATION:
+        return QUEUE_TYPE_CONFIRM
+    if task.attempts.filter(outcome=CallAttempt.Outcome.NO_ANSWER).exists():
+        return QUEUE_TYPE_NEVER_ANSWERED
+    return QUEUE_TYPE_NEW
+
+
+def next_call_available_at(meeting, types=None):
+    """Earliest moment a waiting pending/follow-up call becomes available, or None."""
+    return _callable_tasks(meeting).filter(_queue_filter(meeting, types)).filter(
+        status__in=(CallTask.Status.PENDING, CallTask.Status.FOLLOW_UP), available_at__gt=timezone.now(),
+    ).aggregate(first=Min("available_at"))["first"]
+
+
 @transaction.atomic
-def assign_next_call(user, meeting=None):
+def assign_next_call(user, meeting=None, types=None):
     if meeting is None:
         candidates = list(accessible_meetings(user).filter(operators=user))
         if len(candidates) != 1:
@@ -68,24 +169,21 @@ def assign_next_call(user, meeting=None):
         meeting = candidates[0]
     require_meeting_role(user, meeting, "OPERADOR")
     _operator_initials(user)
+    normalize_queue_types(types)
     now = timezone.now()
     existing = CallTask.objects.filter(
         meeting=meeting, assignee=user, status__in=("assigned", "in_progress"), lease_expires_at__gt=now,
     ).select_for_update().first()
     if existing:
         return existing
-    eligible = CallTask.objects.filter(
-        Q(status=CallTask.Status.PENDING)
-        | Q(status=CallTask.Status.FOLLOW_UP)
+    eligible = _callable_tasks(meeting).filter(_queue_filter(meeting, types)).filter(
+        Q(status__in=(CallTask.Status.PENDING, CallTask.Status.FOLLOW_UP), available_at__lte=now)
         | Q(status__in=(CallTask.Status.ASSIGNED, CallTask.Status.IN_PROGRESS), lease_expires_at__lt=now)
-    ).filter(
-        Q(status__in=(CallTask.Status.ASSIGNED, CallTask.Status.IN_PROGRESS, CallTask.Status.FOLLOW_UP))
-        | Q(available_at__lte=now)
-    ).filter(
-        meeting=meeting, participant__origin_meeting=meeting,
-        participant__do_not_contact=False, participant__contact_authorized=True,
     )
-    tasks = eligible.order_by("created_at", "id")
+    priority = Case(
+        When(status=CallTask.Status.FOLLOW_UP, then=Value(0)), default=Value(1), output_field=IntegerField(),
+    ) if meeting.prioritize_follow_ups else Value(0, output_field=IntegerField())
+    tasks = eligible.annotate(queue_priority=priority).order_by("queue_priority", "available_at", "created_at", "id")
     if not tasks:
         return None
     queryset = tasks.select_for_update(
@@ -97,7 +195,7 @@ def assign_next_call(user, meeting=None):
     reassignment = task.assignee_id is not None
     task.status = CallTask.Status.ASSIGNED
     task.assignee = user
-    task.lease_expires_at = now + timedelta(minutes=10)
+    task.lease_expires_at = now + timedelta(minutes=meeting.call_lease_minutes)
     task.save(update_fields=("status", "assignee", "lease_expires_at", "available_at", "updated_at"))
     CallAssignment.objects.create(
         task=task,
@@ -121,64 +219,233 @@ def suppress_open_call_tasks(participant):
     ).update(status=CallTask.Status.SUPPRESSED, assignee=None, lease_expires_at=None)
 
 
+def _meeting_schedule(meeting, schedule_id, required=False):
+    if schedule_id in (None, ""):
+        if required:
+            raise ValidationError({"schedule_id": "Elige el horario al que asistirá."})
+        return None
+    try:
+        return MeetingSchedule.objects.get(pk=schedule_id, meeting=meeting)
+    except (MeetingSchedule.DoesNotExist, ValueError, TypeError, ValidationError) as exc:
+        raise ValidationError({"schedule_id": "El horario no pertenece a la reunión."}) from exc
+
+
+def _apply_attendance_answer(participant, meeting, outcome, schedule, user):
+    """Update invitation/confirmation state; returns the attendance code when the person accepted."""
+    fields = {"updated_by"}
+    code = None
+    if schedule is not None:
+        participant.schedule = schedule
+        fields.add("schedule")
+    if outcome == CallAttempt.Outcome.ACCEPTED:
+        participant.invitation_status = Participant.InvitationStatus.ACCEPTED
+        fields.add("invitation_status")
+        # Quien acepta durante la fase 2 ya está confirmando su asistencia.
+        if meeting.call_phase == Meeting.CallPhase.CONFIRMATION:
+            participant.attendance_confirmation = Participant.AttendanceConfirmation.CONFIRMED
+            fields.add("attendance_confirmation")
+    elif outcome == CallAttempt.Outcome.CONFIRMED:
+        participant.attendance_confirmation = Participant.AttendanceConfirmation.CONFIRMED
+        fields.add("attendance_confirmation")
+    elif outcome == CallAttempt.Outcome.WILL_NOT_ATTEND:
+        participant.attendance_confirmation = Participant.AttendanceConfirmation.WILL_NOT_ATTEND
+        fields.add("attendance_confirmation")
+    elif outcome == CallAttempt.Outcome.DECLINED:
+        participant.invitation_status = Participant.InvitationStatus.DECLINED
+        fields.add("invitation_status")
+    elif outcome == CallAttempt.Outcome.DO_NOT_CONTACT:
+        participant.do_not_contact = True
+        fields.add("do_not_contact")
+    if len(fields) > 1:
+        participant.updated_by = user
+        participant.save(update_fields=(*sorted(fields), "updated_at"))
+    if outcome == CallAttempt.Outcome.ACCEPTED:
+        code = issue_attendance_code(participant, meeting, user)
+    return code
+
+
 @transaction.atomic
-def record_call_outcome(task_id, user, outcome, notes=""):
+def record_call_outcome(task_id, user, outcome, notes="", follow_up_at=None, schedule_id=None):
     task = CallTask.objects.select_for_update().select_related("participant", "meeting").get(pk=task_id)
     require_meeting_role(user, task.meeting, "OPERADOR")
     if task.assignee_id != user.id or task.status not in (CallTask.Status.ASSIGNED, CallTask.Status.IN_PROGRESS):
         raise PermissionDenied("La llamada no está asignada al operador actual.")
-    if task.lease_expires_at is None or task.lease_expires_at <= timezone.now():
+    now = timezone.now()
+    if task.lease_expires_at is None or task.lease_expires_at <= now:
         raise PermissionDenied("La asignación venció; solicita de nuevo la siguiente llamada.")
-    allowed = {choice for choice, _label in CallAttempt.Outcome.choices}
+    allowed = CONFIRMATION_OUTCOMES if task.purpose == CallTask.Purpose.CONFIRMATION else INVITATION_OUTCOMES
     if not isinstance(outcome, str) or outcome not in allowed:
-        raise ValidationError({"outcome": "Resultado de llamada inválido."})
+        raise ValidationError({"outcome": "Resultado de llamada inválido para esta llamada."})
     if not isinstance(notes, str):
         raise ValidationError({"notes": "Las notas deben ser texto."})
+    follow_up_at = _follow_up_time(task.meeting, outcome, follow_up_at, now)
     participant = Participant.objects.select_for_update().get(pk=task.participant_id)
+    if outcome in (CallAttempt.Outcome.ACCEPTED, CallAttempt.Outcome.CONFIRMED):
+        schedule = _meeting_schedule(
+            task.meeting, schedule_id, required=outcome == CallAttempt.Outcome.ACCEPTED or participant.schedule_id is None,
+        )
+    elif schedule_id not in (None, ""):
+        raise ValidationError({"schedule_id": "Solo se asigna horario al aceptar o confirmar."})
+    else:
+        schedule = None
     CallAttempt.objects.create(
         task=task, participant=participant, operator=user, outcome=outcome, notes=notes.strip()
     )
+    event = "updated"
     if outcome == CallAttempt.Outcome.NO_ANSWER:
-        task.status = CallTask.Status.PENDING
         task.assignee = None
         task.lease_expires_at = None
-        task.available_at = timezone.now() + timedelta(minutes=15)
+        if unanswered_attempts(task) >= task.meeting.max_call_attempts:
+            task.status = CallTask.Status.EXHAUSTED
+            event = "exhausted"
+        else:
+            task.status = CallTask.Status.PENDING
+            task.available_at = now + timedelta(minutes=task.meeting.retry_delay_minutes)
     elif outcome == CallAttempt.Outcome.FOLLOW_UP:
         task.status = CallTask.Status.FOLLOW_UP
         task.assignee = None
         task.lease_expires_at = None
+        task.available_at = follow_up_at
     else:
         task.status = CallTask.Status.COMPLETED
         task.lease_expires_at = None
-
-    if outcome == CallAttempt.Outcome.ACCEPTED:
-        participant.invitation_status = Participant.InvitationStatus.ACCEPTED
-        participant.updated_by = user
-        participant.save(update_fields=("invitation_status", "updated_by", "updated_at"))
-        code = issue_attendance_code(participant, task.meeting, user)
-        task.save(update_fields=("status", "assignee", "lease_expires_at", "available_at", "updated_at"))
-        _publish("calls", {"event": "accepted", "task_id": str(task.id), "code": code.code})
-        return code
-    if outcome == CallAttempt.Outcome.DECLINED:
-        participant.invitation_status = Participant.InvitationStatus.DECLINED
-    elif outcome == CallAttempt.Outcome.DO_NOT_CONTACT:
-        participant.do_not_contact = True
-    if outcome in (CallAttempt.Outcome.DECLINED, CallAttempt.Outcome.DO_NOT_CONTACT):
-        participant.updated_by = user
-        participant.save(update_fields=("invitation_status", "do_not_contact", "updated_by", "updated_at"))
     task.save(update_fields=("status", "assignee", "lease_expires_at", "available_at", "updated_at"))
+    code = _apply_attendance_answer(participant, task.meeting, outcome, schedule, user)
     if outcome == CallAttempt.Outcome.DO_NOT_CONTACT:
         suppress_open_call_tasks(participant)
-    _publish("calls", {"event": "updated", "task_id": str(task.id)})
+    if code is not None:
+        _publish("calls", {"event": "accepted", "task_id": str(task.id), "code": code.code})
+        return code
+    _publish("calls", {"event": event, "task_id": str(task.id)})
     return None
 
 
+def _follow_up_time(meeting, outcome, follow_up_at, now):
+    if follow_up_at in (None, ""):
+        return now + timedelta(minutes=meeting.follow_up_delay_minutes)
+    if outcome != CallAttempt.Outcome.FOLLOW_UP:
+        raise ValidationError({"follow_up_at": "Solo se puede agendar la hora con el resultado «Seguimiento»."})
+    if not isinstance(follow_up_at, datetime):
+        raise ValidationError({"follow_up_at": "Indica una fecha y hora válidas."})
+    if timezone.is_naive(follow_up_at):
+        follow_up_at = timezone.make_aware(follow_up_at)
+    if follow_up_at <= now:
+        raise ValidationError({"follow_up_at": "La hora del seguimiento debe ser futura."})
+    if follow_up_at > now + timedelta(days=MAX_FOLLOW_UP_DAYS):
+        raise ValidationError({"follow_up_at": f"El seguimiento no puede agendarse a más de {MAX_FOLLOW_UP_DAYS} días."})
+    return follow_up_at
+
+
 @transaction.atomic
-def record_inbound_call(participant_id, user, outcome, notes=""):
+def reopen_exhausted_calls(meeting):
+    """Return to the queue the calls that are below a raised attempt limit."""
+    busy = CallTask.objects.filter(meeting=meeting, status__in=OPEN_CALL_STATUSES).values("participant_id")
+    reopened = CallTask.objects.filter(meeting=meeting, status=CallTask.Status.EXHAUSTED).exclude(
+        participant_id__in=busy,
+    ).annotate(
+        unanswered=Count("attempts", filter=_counted_no_answer()),
+    ).filter(unanswered__lt=meeting.max_call_attempts).values_list("pk", flat=True)
+    count = CallTask.objects.filter(pk__in=list(reopened)).update(
+        status=CallTask.Status.PENDING, available_at=timezone.now(), updated_at=timezone.now(),
+    )
+    if count:
+        _publish("calls", {"event": "reopened", "meeting_id": str(meeting.pk), "count": count})
+    return count
+
+
+@transaction.atomic
+def start_confirmation_phase(meeting, user=None):
+    """Phase 2: reset the «No contesta» counters and queue a confirmation call for everyone who accepted."""
+    now = timezone.now()
+    busy = CallTask.objects.filter(meeting=meeting, status__in=OPEN_CALL_STATUSES).values("participant_id")
+    reopened = CallTask.objects.filter(
+        meeting=meeting, purpose=CallTask.Purpose.INVITATION, status=CallTask.Status.EXHAUSTED,
+    ).exclude(participant_id__in=busy).exclude(participant__invitation_status=Participant.InvitationStatus.ACCEPTED)
+    reopened_count = 0
+    seen = set()
+    # Si un participante tiene varias llamadas agotadas solo se reabre la más reciente.
+    for task in reopened.order_by("-updated_at"):
+        if task.participant_id in seen:
+            continue
+        seen.add(task.participant_id)
+        task.status = CallTask.Status.PENDING
+        task.available_at = now
+        task.attempts_reset_at = now
+        task.save(update_fields=("status", "available_at", "attempts_reset_at", "updated_at"))
+        reopened_count += 1
+    CallTask.objects.filter(
+        meeting=meeting, purpose=CallTask.Purpose.INVITATION, status__in=OPEN_CALL_STATUSES,
+    ).update(attempts_reset_at=now)
+    busy_ids = set(
+        CallTask.objects.filter(meeting=meeting, status__in=OPEN_CALL_STATUSES).values_list("participant_id", flat=True)
+    )
+    to_confirm = Participant.objects.filter(
+        origin_meeting=meeting, invitation_status=Participant.InvitationStatus.ACCEPTED,
+        attendance_confirmation=Participant.AttendanceConfirmation.PENDING,
+        do_not_contact=False, contact_authorized=True,
+    ).exclude(pk__in=busy_ids)
+    created = CallTask.objects.bulk_create([
+        CallTask(
+            participant=participant, meeting=meeting, purpose=CallTask.Purpose.CONFIRMATION,
+            created_by=user, available_at=now,
+        )
+        for participant in to_confirm
+    ])
+    AuditEvent.objects.create(
+        actor=user, action="meeting.confirmation_phase_started", object_type="Meeting", object_id=str(meeting.pk),
+        metadata={"reopened": reopened_count, "confirmation_calls": len(created)},
+    )
+    _publish("calls", {"event": "phase_changed", "meeting_id": str(meeting.pk), "phase": meeting.call_phase})
+    return {"reopened": reopened_count, "confirmation_calls": len(created)}
+
+
+def apply_meeting_queue_changes(meeting, previous_phase, previous_max_attempts, user=None):
+    """Run the queue side effects after an administrator saves a meeting."""
+    if meeting.call_phase != previous_phase:
+        if meeting.call_phase == Meeting.CallPhase.CONFIRMATION:
+            start_confirmation_phase(meeting, user)
+        else:
+            _publish("calls", {"event": "phase_changed", "meeting_id": str(meeting.pk), "phase": meeting.call_phase})
+    if previous_max_attempts is not None and meeting.max_call_attempts > previous_max_attempts:
+        reopen_exhausted_calls(meeting)
+
+
+@transaction.atomic
+def sync_meeting_schedules(meeting, entries):
+    """Replace a meeting's schedules: entries with an id update it, without id create one, missing ones are deleted."""
+    existing = {schedule.pk: schedule for schedule in MeetingSchedule.objects.select_for_update().filter(meeting=meeting)}
+    keep = set()
+    for entry in entries:
+        schedule_id = entry.get("id")
+        if schedule_id:
+            if schedule_id not in existing:
+                raise ValidationError({"schedules": "Un horario no pertenece a esta reunión."})
+            keep.add(schedule_id)
+    removed = [schedule for pk, schedule in existing.items() if pk not in keep]
+    for schedule in removed:
+        if schedule.participants.exists():
+            raise ValidationError({"schedules": f"No se puede quitar el horario {schedule.label()}: tiene participantes asignados."})
+    MeetingSchedule.objects.filter(pk__in=[schedule.pk for schedule in removed]).delete()
+    # Se mueven primero a una fecha temporal para que intercambiar horas no choque con la restricción única.
+    placeholder = timezone.now() - timedelta(days=36500)
+    for index, entry in enumerate(entries):
+        if entry.get("id"):
+            MeetingSchedule.objects.filter(pk=entry["id"]).update(starts_at=placeholder + timedelta(seconds=index))
+    for entry in entries:
+        location = (entry.get("location") or "").strip()
+        if entry.get("id"):
+            MeetingSchedule.objects.filter(pk=entry["id"]).update(starts_at=entry["starts_at"], location=location)
+        else:
+            MeetingSchedule.objects.create(meeting=meeting, starts_at=entry["starts_at"], location=location)
+
+
+@transaction.atomic
+def record_inbound_call(participant_id, user, outcome, notes="", schedule_id=None):
     participant = Participant.objects.select_for_update().get(pk=participant_id)
     if not participant.origin_meeting_id:
         raise ValidationError("El participante no tiene una reunión de origen.")
-    require_meeting_role(user, participant.origin_meeting, "OPERADOR")
+    meeting = participant.origin_meeting
+    require_meeting_role(user, meeting, "OPERADOR")
     if not isinstance(outcome, str) or outcome not in {
         CallAttempt.Outcome.CONTACTED,
         CallAttempt.Outcome.ACCEPTED,
@@ -186,25 +453,39 @@ def record_inbound_call(participant_id, user, outcome, notes=""):
         CallAttempt.Outcome.DO_NOT_CONTACT,
         CallAttempt.Outcome.FOLLOW_UP,
         CallAttempt.Outcome.OTHER,
+        CallAttempt.Outcome.CONFIRMED,
+        CallAttempt.Outcome.WILL_NOT_ATTEND,
     }:
         raise ValidationError("Resultado de contacto entrante inválido.")
     if not isinstance(notes, str):
         raise ValidationError({"notes": "Las notas deben ser texto."})
+    if outcome in (CallAttempt.Outcome.CONFIRMED, CallAttempt.Outcome.WILL_NOT_ATTEND) and (
+        participant.invitation_status != Participant.InvitationStatus.ACCEPTED
+    ):
+        raise ValidationError({"outcome": "Solo quien aceptó la invitación puede confirmar o avisar que no asistirá."})
+    if outcome in (CallAttempt.Outcome.ACCEPTED, CallAttempt.Outcome.CONFIRMED):
+        schedule = _meeting_schedule(
+            meeting, schedule_id, required=outcome == CallAttempt.Outcome.ACCEPTED or participant.schedule_id is None,
+        )
+    elif schedule_id not in (None, ""):
+        raise ValidationError({"schedule_id": "Solo se asigna horario al aceptar o confirmar."})
+    else:
+        schedule = None
     task = CallTask.objects.select_for_update().filter(
         participant=participant,
-        meeting=participant.origin_meeting,
-        status__in=(
-            CallTask.Status.PENDING,
-            CallTask.Status.ASSIGNED,
-            CallTask.Status.IN_PROGRESS,
-            CallTask.Status.FOLLOW_UP,
-        ),
+        meeting=meeting,
+        status__in=OPEN_CALL_STATUSES,
     ).order_by("created_at").first()
     if task is None:
         task = CallTask.objects.create(
             participant=participant,
-            meeting=participant.origin_meeting,
+            meeting=meeting,
             status=CallTask.Status.COMPLETED,
+            purpose=(
+                CallTask.Purpose.CONFIRMATION
+                if outcome in (CallAttempt.Outcome.CONFIRMED, CallAttempt.Outcome.WILL_NOT_ATTEND)
+                else CallTask.Purpose.INVITATION
+            ),
             created_by=user,
         )
     else:
@@ -228,47 +509,69 @@ def record_inbound_call(participant_id, user, outcome, notes=""):
         outcome=outcome,
         notes=notes.strip(),
     )
-    if outcome == CallAttempt.Outcome.ACCEPTED:
-        participant.invitation_status = Participant.InvitationStatus.ACCEPTED
-        participant.updated_by = user
-        participant.save(update_fields=("invitation_status", "updated_by", "updated_at"))
-        code = issue_attendance_code(participant, participant.origin_meeting, user)
-        _publish("calls", {"event": "inbound", "task_id": str(task.pk), "code": code.code})
-        return code
-    if outcome == CallAttempt.Outcome.DECLINED:
-        participant.invitation_status = Participant.InvitationStatus.DECLINED
-    if outcome == CallAttempt.Outcome.DO_NOT_CONTACT:
-        participant.do_not_contact = True
     if outcome == CallAttempt.Outcome.FOLLOW_UP:
         task.status = CallTask.Status.FOLLOW_UP
         task.assignee = None
-        task.save(update_fields=("status", "assignee", "lease_expires_at", "updated_at"))
-    if outcome in (CallAttempt.Outcome.DECLINED, CallAttempt.Outcome.DO_NOT_CONTACT):
-        participant.updated_by = user
-        participant.save(update_fields=("invitation_status", "do_not_contact", "updated_by", "updated_at"))
+        task.available_at = timezone.now() + timedelta(minutes=meeting.follow_up_delay_minutes)
+        task.save(update_fields=("status", "assignee", "lease_expires_at", "available_at", "updated_at"))
+    code = _apply_attendance_answer(participant, meeting, outcome, schedule, user)
     if outcome == CallAttempt.Outcome.DO_NOT_CONTACT:
         suppress_open_call_tasks(participant)
+    if code is not None:
+        _publish("calls", {"event": "inbound", "task_id": str(task.pk), "code": code.code})
+        return code
     _publish("calls", {"event": "inbound", "task_id": str(task.pk)})
     return None
 
 
 @transaction.atomic
+def change_participant_schedule(participant_id, schedule_id, user):
+    """The operator moves a person who accepted to another schedule of the same meeting."""
+    participant = Participant.objects.select_for_update(of=("self",)).select_related("origin_meeting").get(pk=participant_id)
+    if not participant.origin_meeting_id:
+        raise ValidationError("El participante no tiene una reunión de origen.")
+    require_meeting_role(user, participant.origin_meeting, "OPERADOR")
+    if participant.invitation_status != Participant.InvitationStatus.ACCEPTED:
+        raise ValidationError("Solo se asigna horario a quien aceptó la invitación.")
+    schedule = _meeting_schedule(participant.origin_meeting, schedule_id, required=True)
+    previous = participant.schedule_id
+    if previous == schedule.pk:
+        return participant
+    participant.schedule = schedule
+    participant.updated_by = user
+    participant.save(update_fields=("schedule", "updated_by", "updated_at"))
+    AuditEvent.objects.create(
+        actor=user, action="participant.schedule_changed", object_type="Participant", object_id=str(participant.pk),
+        metadata={"from": str(previous) if previous else None, "to": str(schedule.pk)},
+    )
+    _publish("calls", {"event": "schedule_changed", "participant_id": str(participant.pk)})
+    return participant
+
+
+@transaction.atomic
 def issue_attendance_code(participant, meeting, operator):
     participant = Participant.objects.select_for_update().get(pk=participant.pk)
-    meeting = Meeting.objects.select_for_update().get(pk=meeting.pk)
     existing = AttendanceCode.objects.filter(participant=participant, meeting=meeting, valid=True).first()
     if existing:
         return existing
-    initials = _operator_initials(operator)
-    sequence = meeting.next_code_sequence
-    meeting.next_code_sequence += 1
-    meeting.save(update_fields=("next_code_sequence",))
+    try:
+        profile = OperatorProfile.objects.select_for_update().get(user=operator)
+    except OperatorProfile.DoesNotExist as exc:
+        raise PermissionDenied("El usuario no tiene iniciales de operador configuradas.") from exc
+    sequence = profile.next_code_sequence
+    code = format_attendance_code(profile.initials, sequence)
+    # Salta secuencias ocupadas (por ejemplo, de un operador anterior con las mismas iniciales).
+    while AttendanceCode.objects.filter(code=code).exists():
+        sequence += 1
+        code = format_attendance_code(profile.initials, sequence)
+    profile.next_code_sequence = sequence + 1
+    profile.save(update_fields=("next_code_sequence",))
     return AttendanceCode.objects.create(
         participant=participant,
         meeting=meeting,
         sequence=sequence,
-        operator_initials=initials,
-        code=meeting.attendance_code(initials, sequence),
+        operator_initials=profile.initials,
+        code=code,
         generated_by=operator,
     )
 
@@ -293,13 +596,16 @@ def change_origin_meeting(participant_id, new_meeting_id, user, reason=""):
             old_code.invalidated_by = user
             old_code.save(update_fields=("valid", "invalidated_at", "invalidated_by"))
         participant.origin_meeting = new_meeting
+        participant.schedule = None
+        participant.attendance_confirmation = Participant.AttendanceConfirmation.PENDING
         participant.updated_by = user
-        participant.save(update_fields=("origin_meeting", "updated_by", "updated_at"))
+        participant.save(update_fields=("origin_meeting", "schedule", "attendance_confirmation", "updated_by", "updated_at"))
         issue_attendance_code(participant, new_meeting, user)
     else:
         participant.origin_meeting = new_meeting
+        participant.schedule = None
         participant.updated_by = user
-        participant.save(update_fields=("origin_meeting", "updated_by", "updated_at"))
+        participant.save(update_fields=("origin_meeting", "schedule", "updated_by", "updated_at"))
     AuditEvent.objects.create(
         actor=user,
         action="participant.meeting_changed",
@@ -357,11 +663,15 @@ def resolve_attendance_conflict(conflict_id, keep_record_id, user, resolution):
 def render_message(template, participant, code=None):
     template.full_clean()
     meeting = participant.origin_meeting
+    schedule = participant.schedule if meeting else None
+    if meeting and schedule is None:
+        schedule = meeting.schedules.first()
+    starts_at = timezone.localtime(schedule.starts_at) if schedule else None
     values = {
         "nombre": participant.full_name,
-        "fecha_reunion": timezone.localtime(meeting.starts_at).strftime("%Y-%m-%d") if meeting else "",
-        "hora_reunion": timezone.localtime(meeting.starts_at).strftime("%H:%M") if meeting else "",
-        "lugar_reunion": meeting.location if meeting else "",
+        "fecha_reunion": starts_at.strftime("%Y-%m-%d") if starts_at else "",
+        "hora_reunion": starts_at.strftime("%H:%M") if starts_at else "",
+        "lugar_reunion": (schedule.effective_location() if schedule else meeting.location) if meeting else "",
         "codigo_asistencia": code.code if code else "",
     }
     variables = set(re.findall(r"{{\s*([a-zA-Z_]+)\s*}}", template.content))
@@ -516,8 +826,8 @@ def export_attendance_package(meeting_id, user):
     require_attendance_pin(meeting)
     private = _private_key()
     code_query = AttendanceCode.objects.filter(valid=True).select_related(
-        "participant", "participant__origin_meeting", "meeting"
-    ).order_by("sequence")
+        "participant", "participant__origin_meeting", "participant__schedule", "meeting"
+    ).order_by("generated_at", "sequence")
     if not meeting.allow_cross_meeting_attendance:
         code_query = code_query.filter(meeting=meeting)
     else:
@@ -528,7 +838,7 @@ def export_attendance_package(meeting_id, user):
         key=lambda code: (
             str(code.participant_id),
             0 if code.meeting_id == code.participant.origin_meeting_id else 1,
-            code.sequence,
+            code.generated_at,
         ),
     )
     selected_codes = {}
@@ -544,6 +854,9 @@ def export_attendance_package(meeting_id, user):
             "origin_meeting_name": code.participant.origin_meeting.name if code.participant.origin_meeting else None,
             "code": code.code,
             "code_id": str(code.pk),
+            "schedule_id": str(code.participant.schedule_id) if code.participant.schedule_id else None,
+            "schedule_label": code.participant.schedule.label() if code.participant.schedule_id else "",
+            "attendance_confirmation": code.participant.attendance_confirmation,
         }
         for code in codes
     ]
@@ -553,9 +866,16 @@ def export_attendance_package(meeting_id, user):
         "meeting.json": _canonical_json(
             {
                 "id": str(meeting.pk),
-                "number": meeting.number,
                 "name": meeting.name,
-                "starts_at": meeting.starts_at.isoformat(),
+                "schedules": [
+                    {
+                        "id": str(schedule.pk),
+                        "starts_at": schedule.starts_at.isoformat(),
+                        "location": schedule.effective_location(),
+                        "label": schedule.label(),
+                    }
+                    for schedule in meeting.schedules.all()
+                ],
                 "location": meeting.location,
                 "allow_cross_meeting_attendance": meeting.allow_cross_meeting_attendance,
                 "attendance_pin_hash": meeting.attendance_pin_hash,
@@ -701,7 +1021,7 @@ def import_attendance_results(uploaded_file, user, expected_meeting=None):
         participant = Participant.objects.get(pk=participant_id)
         if record_origin_id != effective_id and not effective.allow_cross_meeting_attendance:
             raise ValidationError(
-                f"La reunión {effective.number:02d} no permite asistencia de otro origen."
+                f"La reunión «{effective.name}» no permite asistencia de otro origen."
             )
         stale_origin = participant.origin_meeting_id != record_origin_id
         if item.get("participant_name") != package_participant.participant_name:

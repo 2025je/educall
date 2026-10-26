@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 
 from attendance.access import (
     accessible_meetings, active_meeting, has_role, managed_meetings, require_meeting_administration, require_meeting_role,
+    require_realtime_access,
 )
 from attendance.models import (
     AttendanceCode,
@@ -36,10 +37,14 @@ from attendance.models import (
     RealtimeEvent,
 )
 from attendance.services import (
+    QUEUE_TYPES,
     DomainError,
+    apply_meeting_queue_changes,
     assign_next_call,
+    change_participant_schedule,
     export_attendance_package,
     import_attendance_results,
+    next_call_available_at,
     prepare_message_campaign,
     prepare_whatsapp_message,
     preview_attendance_results,
@@ -50,6 +55,7 @@ from attendance.services import (
     set_attendance_pin,
 )
 from attendance.workspace import (
+    call_board,
     create_participant,
     global_statistics,
     meeting_statistics,
@@ -123,6 +129,13 @@ class MeetingMembersView(APIView):
 class MeetingStatisticsView(APIView):
     def get(self, request):
         return Response(meeting_statistics(active_meeting(request, "ADMINISTRADOR")))
+
+
+class CallBoardView(APIView):
+    """Real-time view of the operators' calls for the administrator of the active meeting."""
+
+    def get(self, request):
+        return Response(call_board(active_meeting(request, "ADMINISTRADOR")))
 
 
 class GlobalStatisticsView(APIView):
@@ -231,13 +244,10 @@ class MeetingListView(APIView):
     def post(self, request):
         serializer = s.MeetingSerializer(data=request.data)
         s.validated_data(serializer)
-        try:
-            with transaction.atomic():
-                meeting = serializer.save(
-                    created_by=request.user, updated_by=request.user, administrator=request.user,
-                )
-        except IntegrityError:
-            raise ValidationError("Ya existe una reunión con ese número en esa fecha.")
+        with transaction.atomic():
+            meeting = serializer.save(
+                created_by=request.user, updated_by=request.user, administrator=request.user,
+            )
         return Response({"meeting": s.MeetingSerializer(meeting).data}, status=status.HTTP_201_CREATED)
 
 
@@ -250,12 +260,11 @@ class MeetingDetailView(APIView):
             raise ValidationError("El cuerpo debe ser un objeto JSON válido.")
         serializer = s.MeetingUpdateSerializer(meeting, data=request.data, partial=True)
         data = s.validated_data(serializer)
-        try:
-            with transaction.atomic():
-                meeting = serializer.save(updated_by=request.user)
-                record_meeting_update(request, meeting, data.keys())
-        except IntegrityError:
-            raise ValidationError("Ya existe una reunión con ese número en esa fecha.")
+        previous_phase, previous_attempts = meeting.call_phase, meeting.max_call_attempts
+        with transaction.atomic():
+            meeting = serializer.save(updated_by=request.user)
+            record_meeting_update(request, meeting, data.keys())
+            apply_meeting_queue_changes(meeting, previous_phase, previous_attempts, request.user)
         return Response({"meeting": s.MeetingSerializer(meeting).data})
 
     patch = post
@@ -265,8 +274,18 @@ class NextCallView(APIView):
     permission_classes = (IsAuthenticated, model_permission("attendance.view_calltask", "No tienes permiso para gestionar llamadas."))
 
     def post(self, request):
-        task = assign_next_call(request.user, active_meeting(request, "OPERADOR"))
-        return Response({"task": s.CallTaskSerializer(task).data if task else None})
+        meeting = active_meeting(request, "OPERADOR")
+        data = s.validated_data(s.NextCallRequestSerializer(data=request.data if isinstance(request.data, dict) else {}))
+        types = data["types"] or None
+        task = assign_next_call(request.user, meeting, types)
+        next_at = None if task else next_call_available_at(meeting, types)
+        return Response({
+            "task": s.CallTaskSerializer(task).data if task else None,
+            "call_phase": meeting.call_phase,
+            "queue_types": [{"id": key, "label": label} for key, label in QUEUE_TYPES.items()],
+            "next_available_at": next_at,
+            "next_available_label": s.local_time_label(next_at),
+        })
 
 
 class CallResultView(APIView):
@@ -276,9 +295,11 @@ class CallResultView(APIView):
         meeting = active_meeting(request, "OPERADOR")
         if not CallTask.objects.filter(pk=task_id, meeting=meeting).exists():
             raise NotFound("La tarea no existe.")
-        data = s.validated_data(s.CallResultSerializer(data=request.data))
+        data = s.validated_data(s.CallOutcomeSerializer(data=request.data))
         try:
-            code = record_call_outcome(task_id, request.user, data["outcome"], data["notes"])
+            code = record_call_outcome(
+                task_id, request.user, data["outcome"], data["notes"], data.get("follow_up_at"), data.get("schedule_id"),
+            )
         except CallTask.DoesNotExist:
             raise NotFound("La tarea no existe.")
         except DomainError as exc:
@@ -294,8 +315,24 @@ class InboundCallView(APIView):
         data = s.validated_data(s.InboundCallSerializer(data=request.data))
         if not Participant.objects.filter(pk=data["participant_id"], origin_meeting=meeting).exists():
             raise NotFound("El participante no existe.")
-        code = record_inbound_call(data["participant_id"], request.user, data["outcome"], data["notes"])
+        code = record_inbound_call(
+            data["participant_id"], request.user, data["outcome"], data["notes"], data.get("schedule_id"),
+        )
         return Response(_code_payload(code))
+
+
+class ParticipantScheduleView(APIView):
+    """The operator assigns or changes the schedule of a person who accepted."""
+
+    permission_classes = (IsAuthenticated, model_permission("attendance.add_callattempt", "No tienes permiso para cambiar horarios."))
+
+    def post(self, request, participant_id):
+        meeting = active_meeting(request, "OPERADOR")
+        data = s.validated_data(s.ScheduleChangeSerializer(data=request.data))
+        if not Participant.objects.filter(pk=participant_id, origin_meeting=meeting).exists():
+            raise NotFound("El participante no existe.")
+        participant = change_participant_schedule(participant_id, data["schedule_id"], request.user)
+        return Response({"ok": True, "schedule_id": str(participant.schedule_id), "schedule_label": participant.schedule.label()})
 
 
 class ParticipantSearchView(APIView):
@@ -535,9 +572,10 @@ class EventStreamView(RawResponseAPIView):
     permission_classes = (IsAuthenticated, model_permission("attendance.view_realtimeevent", "No tienes permiso."))
 
     def get(self, request):
-        meeting = active_meeting(request, "OPERADOR")
+        meeting = active_meeting(request)
+        require_realtime_access(request.user, meeting)
         try:
-            cursor = int(request.headers.get("Last-Event-ID", "0"))
+            cursor = int(request.headers.get("Last-Event-ID") or request.query_params.get("last_event_id") or "0")
         except ValueError:
             raise ValidationError("Last-Event-ID debe ser numérico.")
         user = request.user
@@ -547,7 +585,7 @@ class EventStreamView(RawResponseAPIView):
             if current_user is None or not current_user.has_perm("attendance.view_realtimeevent"):
                 return False
             try:
-                require_meeting_role(current_user, Meeting.objects.get(pk=meeting.pk), "OPERADOR")
+                require_realtime_access(current_user, Meeting.objects.get(pk=meeting.pk))
             except (PermissionDenied, Meeting.DoesNotExist):
                 return False
             return True

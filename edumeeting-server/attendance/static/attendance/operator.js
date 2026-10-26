@@ -25,28 +25,60 @@
     return payload;
   }
 
+  const QUEUE_LABELS = { confirm: "Confirmar asistencia", never_answered: "Nunca respondió", new: "Nuevo sin llamar", follow_up: "Seguimiento" };
+  const STATUS_LABELS = { not_invited: "Sin invitar", invited: "Invitado", accepted: "Aceptó", declined: "Rechazó" };
+  const CONFIRMATION_LABELS = { pending: "Sin confirmar", confirmed: "Confirmó", will_not_attend: "No asistirá" };
+  const scheduleOptions = document.getElementById("schedule-options");
+  function fillSchedules(select, selectedId, placeholder) {
+    select.replaceChildren();
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = placeholder;
+    select.append(empty);
+    for (const option of scheduleOptions.options) select.add(option.cloneNode(true));
+    select.value = selectedId || "";
+  }
+  function selectedQueueTypes() {
+    const boxes = [...document.querySelectorAll("#queue-types input[type=checkbox]")];
+    return boxes.filter((box) => box.checked).map((box) => box.value);
+  }
+
   const nextButton = document.getElementById("next-call");
   nextButton.addEventListener("click", async () => {
+    const types = selectedQueueTypes();
+    if (document.getElementById("queue-types") && !types.length) {
+      showToast("Elige al menos un tipo de número.");
+      return;
+    }
     nextButton.disabled = true;
     try {
-      const data = await request("/api/v1/calls/next/", { method: "POST", body: "{}" });
+      const data = await request("/api/v1/calls/next/", { method: "POST", body: JSON.stringify({ types }) });
       const card = document.getElementById("active-call");
       if (!data.task) {
         state.taskId = null;
         card.hidden = true;
-        document.getElementById("call-message").textContent = "No hay llamadas elegibles en este momento.";
+        document.getElementById("call-message").textContent = data.next_available_label
+          ? `No hay llamadas disponibles ahora. La próxima estará disponible a las ${data.next_available_label}.`
+          : "No hay llamadas elegibles en este momento.";
         return;
       }
-      state.taskId = data.task.id;
+      const task = data.task;
+      const person = task.participant;
+      state.taskId = task.id;
+      document.querySelectorAll("[data-purpose]").forEach((group) => { group.hidden = group.dataset.purpose !== task.purpose; });
       document.querySelectorAll("[data-outcome]").forEach((item) => { item.disabled = false; });
-      document.getElementById("participant-name").textContent = data.task.participant.name;
-      const origin = data.task.participant.origin_meeting?.name || "Sin reunión de origen";
+      document.getElementById("participant-name").textContent = person.name;
+      const confirmation = person.invitation_status === "accepted"
+        ? ` · Asistencia: ${CONFIRMATION_LABELS[person.attendance_confirmation] || person.attendance_confirmation}` : "";
       document.getElementById("participant-details").textContent =
-        `${data.task.participant.phone || "Sin teléfono"} · Llamada para: ${data.task.meeting.name} · Origen: ${origin} · Invitación: ${data.task.participant.invitation_status}`;
+        `${person.phone || "Sin teléfono"} · ${QUEUE_LABELS[task.queue_type] || task.queue_type} · Invitación: ${STATUS_LABELS[person.invitation_status] || person.invitation_status}` +
+        `${person.schedule_label ? ` · Horario: ${person.schedule_label}` : ""}${confirmation}`;
+      fillSchedules(document.getElementById("call-schedule"), person.schedule_id, "Elige el horario (obligatorio al aceptar)");
+      document.getElementById("call-follow-up").value = "";
       document.getElementById("call-notes").value = "";
       const history = document.getElementById("call-history");
       history.replaceChildren();
-      for (const attempt of data.task.history) {
+      for (const attempt of task.history) {
         const entry = document.createElement("li");
         entry.textContent = `${attempt.created_at} · ${attempt.operator} · ${attempt.outcome}${attempt.notes ? ` · ${attempt.notes}` : ""}`;
         history.append(entry);
@@ -59,13 +91,20 @@
 
   document.querySelectorAll("[data-outcome]").forEach((button) => button.addEventListener("click", async () => {
     if (!state.taskId || button.disabled) return;
+    const outcome = button.dataset.outcome;
+    const scheduleId = document.getElementById("call-schedule").value;
+    if (outcome === "accepted" && !scheduleId) {
+      showToast("Elige el horario al que asistirá antes de registrar la aceptación.");
+      return;
+    }
+    const followUp = document.getElementById("call-follow-up").value;
+    const body = { outcome, notes: document.getElementById("call-notes").value };
+    if (["accepted", "confirmed"].includes(outcome) && scheduleId) body.schedule_id = scheduleId;
+    if (outcome === "follow_up" && followUp) body.follow_up_at = new Date(followUp).toISOString();
     const outcomeButtons = [...document.querySelectorAll("[data-outcome]")];
     outcomeButtons.forEach((item) => { item.disabled = true; });
     try {
-      const data = await request(`/api/v1/calls/${state.taskId}/result/`, {
-        method: "POST",
-        body: JSON.stringify({ outcome: button.dataset.outcome, notes: document.getElementById("call-notes").value }),
-      });
+      const data = await request(`/api/v1/calls/${state.taskId}/result/`, { method: "POST", body: JSON.stringify(body) });
       showToast(data.code ? `Aceptación registrada. Código: ${data.code}` : "Resultado registrado.");
       state.taskId = null;
       document.getElementById("active-call").hidden = true;
@@ -106,27 +145,54 @@
       for (const person of data.results) {
         const item = document.createElement("li");
         const title = document.createElement("span");
-        title.textContent = `${person.name} · ${person.phone || "Sin teléfono"}${person.do_not_contact ? " · NO CONTACTAR" : ""}`;
+        title.textContent = `${person.name} · ${person.phone || "Sin teléfono"}${person.do_not_contact ? " · NO CONTACTAR" : ""}` +
+          ` · ${STATUS_LABELS[person.invitation_status] || person.invitation_status}` +
+          `${person.schedule_label ? ` · Horario: ${person.schedule_label}` : ""}` +
+          `${person.invitation_status === "accepted" ? ` · ${CONFIRMATION_LABELS[person.attendance_confirmation] || ""}` : ""}`;
         const inboundOutcome = document.createElement("select");
-        for (const [value, label] of [["contacted", "Contactado"], ["accepted", "Aceptó"], ["declined", "Rechazó"], ["do_not_contact", "No volver a contactar"], ["follow_up", "Seguimiento"], ["other", "Otro"]]) {
+        inboundOutcome.setAttribute("aria-label", `Resultado del contacto de ${person.name}`);
+        for (const [value, label] of [["contacted", "Contactado"], ["accepted", "Aceptó"], ["confirmed", "Confirmó asistencia"], ["will_not_attend", "No asistirá"], ["declined", "Rechazó"], ["do_not_contact", "No volver a contactar"], ["follow_up", "Seguimiento"], ["other", "Otro"]]) {
           const option = document.createElement("option");
           option.value = value;
           option.textContent = label;
           inboundOutcome.append(option);
         }
+        const schedule = document.createElement("select");
+        schedule.setAttribute("aria-label", `Horario de ${person.name}`);
+        fillSchedules(schedule, person.schedule_id, "Horario…");
         const inbound = document.createElement("button");
         inbound.textContent = "Contacto entrante";
         inbound.disabled = !person.origin_meeting;
         inbound.addEventListener("click", async () => {
+          if (inboundOutcome.value === "accepted" && !schedule.value) {
+            showToast("Elige el horario al que asistirá.");
+            return;
+          }
           inbound.disabled = true;
           try {
-            const data = await request("/api/v1/calls/inbound/", {
-              method: "POST",
-              body: JSON.stringify({ participant_id: person.id, outcome: inboundOutcome.value }),
-            });
+            const body = { participant_id: person.id, outcome: inboundOutcome.value };
+            if (["accepted", "confirmed"].includes(inboundOutcome.value) && schedule.value) body.schedule_id = schedule.value;
+            const data = await request("/api/v1/calls/inbound/", { method: "POST", body: JSON.stringify(body) });
             showToast(data.code ? `Contacto registrado. Código: ${data.code}` : "Contacto entrante registrado.");
           } catch (error) { showToast(error.message); }
           finally { inbound.disabled = false; }
+        });
+        const changeSchedule = document.createElement("button");
+        changeSchedule.textContent = "Cambiar horario";
+        changeSchedule.disabled = person.invitation_status !== "accepted";
+        changeSchedule.addEventListener("click", async () => {
+          if (!schedule.value) {
+            showToast("Elige el nuevo horario.");
+            return;
+          }
+          changeSchedule.disabled = true;
+          try {
+            const data = await request(`/api/v1/participants/${person.id}/schedule/`, {
+              method: "POST", body: JSON.stringify({ schedule_id: schedule.value }),
+            });
+            showToast(`Horario actualizado: ${data.schedule_label}`);
+          } catch (error) { showToast(error.message); }
+          finally { changeSchedule.disabled = false; }
         });
         const select = document.createElement("button");
         select.textContent = "Usar plantilla";
@@ -157,7 +223,7 @@
           });
           renderCampaignSelection();
         });
-        item.append(title, inboundOutcome, inbound, select, messageTemplate, addCampaign);
+        item.append(title, inboundOutcome, schedule, inbound, changeSchedule, select, messageTemplate, addCampaign);
         list.append(item);
       }
       if (!data.results.length) showToast("No se encontraron participantes.");

@@ -2,6 +2,8 @@ from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, inline_serializer
 from rest_framework import serializers
 
+from attendance.models import Meeting
+
 from . import serializers as s
 
 
@@ -42,8 +44,10 @@ REQUESTS = {
     "RegisterParticipantView": s.ParticipantRegistrationSerializer,
     "MeetingListView": s.MeetingSerializer,
     "MeetingDetailView": s.MeetingUpdateSerializer,
-    "CallResultView": s.CallResultSerializer,
+    "CallResultView": s.CallOutcomeSerializer,
     "InboundCallView": s.InboundCallSerializer,
+    "NextCallView": s.NextCallRequestSerializer,
+    "ParticipantScheduleView": s.ScheduleChangeSerializer,
     "WhatsappPrepareView": s.WhatsappPrepareSerializer,
     "CampaignPrepareView": s.CampaignSerializer,
     "MessageStatusView": s.MessageStatusSerializer,
@@ -82,7 +86,75 @@ class AccountsSerializer(serializers.Serializer):
     groups = AccountGroupSerializer(many=True)
 
 
+class CurrentCallSerializer(serializers.Serializer):
+    task_id = serializers.UUIDField()
+    participant = serializers.CharField()
+    status = serializers.ChoiceField(choices=["assigned", "in_progress"])
+    status_label = serializers.CharField()
+    since = serializers.DateTimeField()
+    lease_expires_at = serializers.DateTimeField()
+
+
+class LastAttemptSerializer(serializers.Serializer):
+    participant = serializers.CharField()
+    outcome = serializers.CharField()
+    outcome_label = serializers.CharField()
+    at = serializers.DateTimeField()
+
+
+class OperatorCallStateSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    full_name = serializers.CharField(allow_blank=True)
+    state = serializers.ChoiceField(choices=["on_call", "idle", "inactive"])
+    state_label = serializers.CharField()
+    current_call = CurrentCallSerializer(allow_null=True)
+    last_attempt = LastAttemptSerializer(allow_null=True)
+    call_attempts = serializers.IntegerField()
+    attempts_last_24h = serializers.IntegerField()
+    accepted = serializers.IntegerField()
+
+
+class CallQueueSerializer(serializers.Serializer):
+    pending = serializers.IntegerField()
+    scheduled = serializers.IntegerField()
+    follow_up = serializers.IntegerField()
+    in_progress = serializers.IntegerField()
+    completed = serializers.IntegerField()
+    exhausted = serializers.IntegerField()
+    to_confirm = serializers.IntegerField()
+
+
+class CallBoardSerializer(serializers.Serializer):
+    meeting_id = serializers.CharField()
+    meeting_name = serializers.CharField()
+    call_phase = serializers.ChoiceField(choices=Meeting.CallPhase.choices)
+    call_phase_label = serializers.CharField()
+    generated_at = serializers.DateTimeField()
+    queue = CallQueueSerializer()
+    on_call = serializers.IntegerField()
+    operators = OperatorCallStateSerializer(many=True)
+    last_event_id = serializers.IntegerField(help_text="Cursor para /attendance/stream/?last_event_id= sin reenviar eventos antiguos.")
+
+
+class ScheduleStatisticsSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    label = serializers.CharField()
+    starts_at = serializers.DateTimeField()
+    accepted = serializers.IntegerField()
+    confirmed = serializers.IntegerField()
+
+
+def SCHEDULE_STATS():
+    return ScheduleStatisticsSerializer()
+
+
+def PHASE():
+    return serializers.ChoiceField(choices=Meeting.CallPhase.choices)
+
+
 RESPONSES = {
+    "CallBoardView": CallBoardSerializer,
     "AccountListView": {"get": AccountsSerializer, "post": AccountResultSerializer},
     "AccountDetailView": AccountResultSerializer,
     "AccountStatusView": AccountResultSerializer,
@@ -96,8 +168,10 @@ RESPONSES = {
         selected_registrars=array(integer()), selected_operators=array(integer()),
     ),
     "MeetingStatisticsView": obj(
-        "MeetingStatistics", meeting_id=text(), meeting_name=text(), registered=integer(), pending_calls=integer(),
-        completed_calls=integer(), call_attempts=integer(), accepted=integer(),
+        "MeetingStatistics", meeting_id=text(), meeting_name=text(), call_phase=PHASE(), call_phase_label=text(),
+        registered=integer(), pending_calls=integer(),
+        completed_calls=integer(), call_attempts=integer(), accepted=integer(), confirmed=integer(), will_not_attend=integer(),
+        schedules=array(SCHEDULE_STATS()),
         users=array(obj("UserStatistics", id=integer(), username=text(), registered=integer(), call_attempts=integer(), accepted=integer())),
     ),
     "GlobalStatisticsView": obj(
@@ -105,21 +179,29 @@ RESPONSES = {
         totals=obj(
             "GlobalStatisticsTotals", meetings=integer(), active_meetings=integer(), registered=integer(),
             pending_calls=integer(), completed_calls=integer(), call_attempts=integer(), accepted=integer(),
+            confirmed=integer(), will_not_attend=integer(),
             attendance=integer(), pending_review=integer(), rejected=integer(),
         ),
         meetings=array(obj(
-            "MeetingOverview", meeting_id=text(), meeting_name=text(), number=integer(),
-            starts_at=serializers.DateTimeField(), active=boolean(), administrator=text(allow_null=True),
+            "MeetingOverview", meeting_id=text(), meeting_name=text(), call_phase=PHASE(), call_phase_label=text(),
+            starts_at=serializers.DateTimeField(allow_null=True), active=boolean(), administrator=text(allow_null=True),
             registered=integer(), pending_calls=integer(), completed_calls=integer(), call_attempts=integer(),
-            accepted=integer(), attendance=integer(), pending_review=integer(), rejected=integer(),
+            accepted=integer(), confirmed=integer(), will_not_attend=integer(), schedules=array(SCHEDULE_STATS()),
+            attendance=integer(), pending_review=integer(), rejected=integer(),
             users=array(obj("OverviewUserStatistics", id=integer(), username=text(), registered=integer(), call_attempts=integer(), accepted=integer())),
         )),
     ),
     "MeetingDetailView": obj("MeetingResult", meeting=s.MeetingSerializer()),
     "RegisterParticipantView": obj("RegisteredParticipant", id=serializers.UUIDField(), ok=boolean()),
-    "NextCallView": obj("NextCall", task=s.CallTaskSerializer(allow_null=True)),
+    "NextCallView": obj(
+        "NextCall", task=s.CallTaskSerializer(allow_null=True), call_phase=PHASE(),
+        queue_types=array(obj("QueueType", id=text(), label=text())),
+        next_available_at=serializers.DateTimeField(allow_null=True),
+        next_available_label=text(allow_null=True),
+    ),
     "CallResultView": CODE,
     "InboundCallView": CODE,
+    "ParticipantScheduleView": obj("ScheduleChangeResult", ok=boolean(), schedule_id=text(), schedule_label=text()),
     "ParticipantSearchView": obj("ParticipantSearchResults", next_page=serializers.IntegerField(allow_null=True), results=s.ParticipantSearchSerializer(many=True)),
     "MessageTemplateListView": obj("MessageTemplates", templates=array(obj("MessageTemplateChoice", id=integer(), name=text()))),
     "WhatsappPrepareView": obj("PreparedWhatsapp", log_id=integer(), message=text(), whatsapp_url=serializers.URLField(), qr_url=text(allow_null=True)),
@@ -226,6 +308,11 @@ class EduMeetingSchema(AutoSchema):
             parameters.extend([
                 OpenApiParameter("page_size", int), OpenApiParameter("status", str), OpenApiParameter("method", str),
                 OpenApiParameter("recorded_after", OpenApiTypes.DATETIME), OpenApiParameter("recorded_before", OpenApiTypes.DATETIME),
+            ])
+        if name == "EventStreamView":
+            parameters.extend([
+                OpenApiParameter("last_event_id", int, description="Último evento recibido; el encabezado Last-Event-ID tiene prioridad."),
+                OpenApiParameter("Last-Event-ID", int, OpenApiParameter.HEADER, description="Cursor estándar de reconexión SSE."),
             ])
         if name not in ("ObtainTokenView", "RefreshTokenView", "RevokeTokenView"):
             parameters.append(OpenApiParameter("X-EduMeeting-Meeting", str, OpenApiParameter.HEADER, description="UUID de la reunión activa (necesario para JWT en operaciones de reunión)."))

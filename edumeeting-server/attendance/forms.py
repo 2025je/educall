@@ -9,7 +9,7 @@ from django.utils import timezone
 from django.utils.html import format_html
 
 from .access import role_label
-from .models import Meeting, OperatorProfile, Participant
+from .models import Meeting, MeetingSchedule, OperatorProfile, Participant
 
 
 class RoleMultipleChoiceField(forms.ModelMultipleChoiceField):
@@ -118,22 +118,57 @@ class UserManagementForm(forms.ModelForm):
 
 
 class MeetingCreationForm(forms.ModelForm):
+    field_order = (
+        "name", "location", "active",
+        "call_lease_minutes", "retry_delay_minutes", "max_call_attempts", "follow_up_delay_minutes", "prioritize_follow_ups",
+    )
+
+    class Meta:
+        model = Meeting
+        fields = (
+            "name", "location",
+            "call_lease_minutes", "retry_delay_minutes", "max_call_attempts", "follow_up_delay_minutes", "prioritize_follow_ups",
+        )
+        labels = {
+            "name": "Nombre",
+            "location": "Lugar",
+        }
+        help_texts = {"location": "Lugar por defecto de los horarios que no indiquen uno propio."}
+
+    QUEUE_FIELDS = ("call_lease_minutes", "retry_delay_minutes", "max_call_attempts", "follow_up_delay_minutes")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in self.QUEUE_FIELDS:
+            self.fields[name].required = False
+
+    def clean(self):
+        cleaned = super().clean()
+        for name in self.QUEUE_FIELDS:
+            if name in cleaned and cleaned[name] is None:
+                cleaned[name] = getattr(self.instance, name)
+        return cleaned
+
+
+class MeetingEditForm(MeetingCreationForm):
+    class Meta(MeetingCreationForm.Meta):
+        fields = MeetingCreationForm.Meta.fields + ("call_phase", "active")
+        labels = {**MeetingCreationForm.Meta.labels, "active": "Reunión activa"}
+
+
+class MeetingScheduleForm(forms.ModelForm):
     starts_date = forms.DateField(
         label="Fecha", widget=forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
     )
     starts_time = forms.TimeField(
         label="Hora", widget=forms.TimeInput(format="%H:%M", attrs={"type": "time"}),
     )
-    field_order = ("number", "name", "starts_date", "starts_time", "location", "active")
+    field_order = ("starts_date", "starts_time", "location")
 
     class Meta:
-        model = Meeting
-        fields = ("number", "name", "location")
-        labels = {
-            "number": "Número de reunión",
-            "name": "Nombre",
-            "location": "Lugar",
-        }
+        model = MeetingSchedule
+        fields = ("location",)
+        labels = {"location": "Lugar (opcional)"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -147,16 +182,34 @@ class MeetingCreationForm(forms.ModelForm):
         day, hour = cleaned.get("starts_date"), cleaned.get("starts_time")
         if day and hour:
             self.instance.starts_at = timezone.make_aware(datetime.datetime.combine(day, hour))
-            errors = Meeting.schedule_errors(cleaned.get("number"), self.instance.starts_at, self.instance)
-            for field, message in errors.items():
-                self.add_error("number" if field == "number" else "starts_date", message)
         return cleaned
 
 
-class MeetingEditForm(MeetingCreationForm):
-    class Meta(MeetingCreationForm.Meta):
-        fields = MeetingCreationForm.Meta.fields + ("active",)
-        labels = {**MeetingCreationForm.Meta.labels, "active": "Reunión activa"}
+class BaseScheduleFormSet(forms.BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        seen = set()
+        for form in self.forms:
+            if not form.has_changed() and not form.instance.pk:
+                continue
+            if self.can_delete and self._should_delete_form(form):
+                if form.instance.pk and form.instance.participants.exists():
+                    raise ValidationError(
+                        f"El horario {form.instance.label()} tiene participantes asignados; reasígnalos antes de eliminarlo."
+                    )
+                continue
+            starts_at = form.instance.starts_at
+            if starts_at in seen:
+                raise ValidationError("Hay dos horarios con la misma fecha y hora.")
+            seen.add(starts_at)
+
+
+ScheduleFormSet = forms.inlineformset_factory(
+    Meeting, MeetingSchedule, form=MeetingScheduleForm, formset=BaseScheduleFormSet,
+    extra=1, can_delete=True, min_num=1, validate_min=True,
+)
 
 
 class ParticipantRegistrationForm(forms.ModelForm):

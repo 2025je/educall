@@ -7,14 +7,15 @@
 {% block breadcrumbs %} <span>›</span> <a href="{% url 'meeting-management' %}">Gestionar reuniones</a> <span>›</span> <span>Editar</span>{% endblock %}
 {% block toc %}<li><a class="md-nav__link" href="#editar">Datos de la reunión</a></li>{% endblock %}
 {% block content %}
-<h1>Editar {{ meeting.number }} · {{ meeting.name }}</h1>
-<div class="admonition warning"><p>Fecha y hora en la zona del servidor: <strong>{{ meeting_timezone }}</strong>. Si desmarcas «Reunión activa», registradores y operadores dejarán de verla; sus datos se conservan.</p></div>
+<h1>Editar {{ meeting.name }}</h1>
+<div class="admonition warning"><p>Fecha y hora en la zona del servidor: <strong>{{ meeting_timezone }}</strong>. Si desmarcas «Reunión activa», registradores y operadores dejarán de verla; sus datos se conservan.</p>
+<p><strong>Fases de llamadas.</strong> Fase 1: los operadores invitan y asignan horario. Fase 2: confirman la asistencia de quienes aceptaron (pudiendo cambiar su horario) y vuelven a llamar a quienes nunca respondieron. Al pasar a la fase 2 se reinicia el contador de «No contesta» y se crea una llamada de confirmación por cada persona que aceptó. Los registradores pueden seguir añadiendo personas en ambas fases.</p></div>
 <section class="md-section">
   <h2 id="editar">Datos de la reunión</h2>
   <form method="post" class="md-form">
     {% csrf_token %}
     {{ form.as_p }}
-    {% include "attendance/code_preview.html" %}
+    {% include "attendance/schedule_formset.html" %}
     <div class="actions"><button type="submit" class="md-button">Guardar cambios</button><a class="md-button secondary" href="{% url 'meeting-management' %}">Volver a mis reuniones</a></div>
   </form>
 </section>

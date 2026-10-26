@@ -28,6 +28,7 @@ from attendance.consumers import AttendanceConsumer
 from attendance.models import Meeting, PackageExportJob, RealtimeEvent
 from attendance.tasks import generate_attendance_package
 from config.celery import app
+from attendance.testing import create_meeting
 
 
 @skipUnless(os.environ.get("EDUMEETING_TEST_LIVE_SERVICES") == "1", "Requiere Redis y prueba explícita de servicios reales.")
@@ -36,7 +37,7 @@ class LiveServicesTests(TransactionTestCase):
         self.root = get_user_model().objects.create_superuser("live-test-root", password=None)
         self.owner = get_user_model().objects.create_user("live-test-owner")
         self.owner.groups.add(*Group.objects.filter(name__in=("ADMINISTRADOR", "OPERADOR")))
-        self.meeting = Meeting.objects.create(
+        self.meeting = create_meeting(
             number=1, name="Servicios reales", starts_at=timezone.now(), administrator=self.owner,
             attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
         )

@@ -141,7 +141,7 @@ import org.edumeeting.asistencia.data.LocalParticipant
 class MainActivity : ComponentActivity() {
     private val database by lazy {
         Room.databaseBuilder(applicationContext, AttendanceDatabase::class.java, "attendance.db")
-            .addMigrations(AttendanceDatabase.MIGRATION_1_2)
+            .addMigrations(AttendanceDatabase.MIGRATION_1_2, AttendanceDatabase.MIGRATION_2_3)
             .build()
     }
 
@@ -165,10 +165,16 @@ enum class AppScreen(val title: String, val icon: ImageVector) {
     Exportar("Exportar", Icons.Default.Share),
 }
 
-private fun LocalMeeting.label(): String = "${number.toString().padStart(2, '0')} · $name"
+private fun LocalMeeting.label(): String = name
 
 private fun LocalMeeting.details(): String =
-    listOf(startsAt, location).filter { it.isNotBlank() }.joinToString(" · ")
+    listOf(schedules.lines().filter { it.isNotBlank() }.joinToString(" | "), location).filter { it.isNotBlank() }.joinToString(" · ")
+
+private fun LocalMeeting.initials(): String =
+    name.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "R" }
+
+private fun LocalMeeting.exportFileName(): String =
+    name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "reunion" }
 
 @Composable
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalMaterial3Api::class)
@@ -452,7 +458,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                     packageRosterCount = packageRosterCount,
                     syncStatus = syncStatus,
                     onExport = { meeting ->
-                        exportLauncher.launch("${meeting.number.toString().padStart(2, '0')}-attendance.attendance-results")
+                        exportLauncher.launch("${meeting.exportFileName()}-attendance.attendance-results")
                     },
                     onChooseMeeting = { screen = AppScreen.Reunion },
                 )
@@ -497,6 +503,11 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                             Text(participant.name, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 participant.code,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (participant.scheduleLabel.isNotBlank()) Text(
+                                "Horario: ${participant.scheduleLabel}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -897,7 +908,7 @@ private fun MeetingItem(meeting: LocalMeeting, selected: Boolean, onClick: () ->
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        meeting.number.toString().padStart(2, '0'),
+                        meeting.initials(),
                         color = accent,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.labelLarge,
@@ -1151,7 +1162,7 @@ private fun RegisterScreen(
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
-                        "Escribe un nombre, teléfono o código (p. ej. JU-251026-07-001), o usa «Escanear QR».",
+                        "Escribe un nombre, teléfono o código (p. ej. JU-0001), o usa «Escanear QR».",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1172,9 +1183,12 @@ private fun RegisterScreen(
                         headlineContent = { Text(participant.name, fontWeight = FontWeight.SemiBold) },
                         supportingContent = {
                             Text(
-                                listOf(participant.phone, participant.code).filter { it.isNotBlank() }.joinToString(" · "),
+                                listOf(participant.phone, participant.code, participant.scheduleLabel).filter { it.isNotBlank() }.joinToString(" · "),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            if (participant.attendanceConfirmation == "will_not_attend") {
+                                Text("Avisó que no asistiría", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                            }
                         },
                         trailingContent = {
                             Button(

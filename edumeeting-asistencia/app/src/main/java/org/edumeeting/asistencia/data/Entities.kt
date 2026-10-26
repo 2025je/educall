@@ -8,9 +8,9 @@ import androidx.room.PrimaryKey
 @Entity
 data class LocalMeeting(
     @PrimaryKey val id: String,
-    val number: Int,
     val name: String,
-    val startsAt: String,
+    /** Horarios de la reunión, uno por línea ("dd/mm/AAAA HH:MM · lugar"). */
+    val schedules: String,
     val location: String,
     val allowCrossMeetingAttendance: Boolean,
     val invitedCount: Int,
@@ -34,6 +34,8 @@ data class LocalParticipant(
     val originMeetingName: String?,
     val meetingId: String,
     val code: String,
+    @ColumnInfo(defaultValue = "") val scheduleLabel: String = "",
+    @ColumnInfo(defaultValue = "") val attendanceConfirmation: String = "",
 )
 
 @Entity(

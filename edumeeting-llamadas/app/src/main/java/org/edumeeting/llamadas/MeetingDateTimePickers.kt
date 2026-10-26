@@ -39,7 +39,7 @@ internal fun MeetingDateTimePickers(
     val selectedDay = runCatching { LocalDate.parse(day, isoDay) }.getOrNull()
     val selectedTime = runCatching { LocalTime.parse(time, isoTime) }.getOrNull()
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("Fecha y hora de la reunión")
+        Text("Fecha y hora")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
                 enabled = enabled,
@@ -66,32 +66,5 @@ internal fun MeetingDateTimePickers(
                 },
             ) { ActionLabel(selectedTime?.format(isoTime) ?: "Elegir hora", Icons.Default.Notifications) }
         }
-    }
-}
-
-private val codeDay = DateTimeFormatter.ofPattern("ddMMyy")
-
-/** Formato del servidor: iniciales-DDMMAA-NN-secuencia. */
-internal fun previewAttendanceCode(number: String, day: String): Pair<String, String> {
-    val n = number.trim().toIntOrNull()?.takeIf { it in 1..99 }
-    val nn = n?.let { "%02d".format(it) } ?: "NN"
-    val date = runCatching { LocalDate.parse(day, isoDay).format(codeDay) }.getOrNull() ?: "DDMMAA"
-    return "JU-$date-$nn-001" to "$date = fecha (día, mes, año) · $nn = número de reunión"
-}
-
-@Composable
-internal fun AttendanceCodePreview(number: String, day: String) {
-    val (code, dateAndNumber) = previewAttendanceCode(number, day)
-    Admonition(AdmonitionKind.Example, "Vista previa del código de asistencia") {
-        CodeText(code)
-        Text(
-            "JU = iniciales del operador · $dateAndNumber · 001 = orden del invitado",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            "El número no puede repetirse el mismo día; en otra fecha sí.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

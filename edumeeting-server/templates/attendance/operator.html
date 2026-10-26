@@ -5,19 +5,45 @@
 {% include "attendance/workspace_cards.html" %}
 <section class="md-section">
   <div class="section-heading"><h2 id="cola">Cola de llamadas</h2><button id="next-call" class="md-button">Siguiente llamada</button></div>
+  {% if active_meeting.call_phase == "confirmation" %}
+  <div class="admonition info"><p class="admonition-title">Fase 2 · Confirmación</p><p>Confirma la asistencia de quienes aceptaron (puedes cambiar su horario) o vuelve a llamar a quienes nunca respondieron. Elige qué números quieres que te entregue la cola:</p>
+    <fieldset class="md-checklist" id="queue-types">
+      <legend>Tipos de número</legend>
+      <label class="md-check"><input type="checkbox" value="confirm" checked> Confirmar asistencia</label>
+      <label class="md-check"><input type="checkbox" value="never_answered" checked> Nunca respondieron</label>
+      <label class="md-check"><input type="checkbox" value="new" checked> Nuevos sin llamar</label>
+      <label class="md-check"><input type="checkbox" value="follow_up" checked> Seguimientos</label>
+    </fieldset>
+  </div>
+  {% else %}
+  <p class="md-meta"><span class="md-chip">Fase 1 · Invitación</span> Invita y asigna el horario al que asistirá cada persona.</p>
+  {% endif %}
+  <select id="schedule-options" hidden aria-hidden="true">
+    {% for schedule in active_meeting.schedules.all %}<option value="{{ schedule.pk }}">{{ schedule.label }}</option>{% endfor %}
+  </select>
   <p id="call-message" data-meeting-id="{{ active_meeting.pk }}" role="status">Solicita una llamada cuando estés listo.</p>
   <article id="active-call" class="md-card" hidden>
     <h3 id="participant-name"></h3>
     <p id="participant-details"></p>
     <ol id="call-history"></ol>
+    <label for="call-schedule">Horario al que asistirá</label>
+    <select id="call-schedule"></select>
+    <label for="call-follow-up">Hora del seguimiento (opcional, solo con «Seguimiento»)</label>
+    <input id="call-follow-up" type="datetime-local">
     <label for="call-notes">Notas</label>
     <textarea id="call-notes" rows="3"></textarea>
-    <div class="actions">
+    <div class="actions" data-purpose="invitation">
       <button data-outcome="no_answer" class="md-button secondary">No contesta</button>
       <button data-outcome="contacted" class="md-button secondary">Contactado</button>
       <button data-outcome="accepted" class="md-button">Aceptó</button>
       <button data-outcome="declined" class="md-button secondary">Rechazó</button>
       <button data-outcome="do_not_contact" class="md-button danger">No volver a contactar</button>
+      <button data-outcome="follow_up" class="md-button secondary">Seguimiento</button>
+    </div>
+    <div class="actions" data-purpose="confirmation" hidden>
+      <button data-outcome="confirmed" class="md-button">Confirmó asistencia</button>
+      <button data-outcome="will_not_attend" class="md-button secondary">No asistirá</button>
+      <button data-outcome="no_answer" class="md-button secondary">No contesta</button>
       <button data-outcome="follow_up" class="md-button secondary">Seguimiento</button>
     </div>
   </article>

@@ -206,12 +206,21 @@ private fun MeetingOverviewCard(meeting: JSONObject) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "${meeting.getInt("number")} · ${meeting.getString("meeting_name")}",
+                    meeting.getString("meeting_name"),
                     style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
                 val active = meeting.getBoolean("active")
                 Tag(if (active) "Activa" else "Inactiva", highlighted = active)
+            }
+            meeting.optString("call_phase_label").takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            meeting.optJSONArray("schedules")?.objects()?.forEach { schedule ->
+                Text(
+                    "• ${schedule.optString("label")} · Aceptaron ${schedule.optInt("accepted")} · Confirmaron ${schedule.optInt("confirmed")}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             Text(
                 "Administrador: ${meeting.optString("administrator").takeUnless { meeting.isNull("administrator") } ?: "sin asignar"}",
@@ -220,7 +229,8 @@ private fun MeetingOverviewCard(meeting: JSONObject) {
             Text(
                 "Registrados ${meeting.getInt("registered")} · Pendientes ${meeting.getInt("pending_calls")} · " +
                     "Finalizadas ${meeting.getInt("completed_calls")} · Intentos ${meeting.getInt("call_attempts")} · " +
-                    "Aceptaron ${meeting.getInt("accepted")}",
+                    "Aceptaron ${meeting.getInt("accepted")} · Confirmaron ${meeting.optInt("confirmed")} · " +
+                    "No asistirán ${meeting.optInt("will_not_attend")}",
             )
             Text(
                 "Asistencias ${meeting.getInt("attendance")} · Por revisar ${meeting.getInt("pending_review")} · " +

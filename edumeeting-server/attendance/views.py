@@ -10,7 +10,9 @@ from django.views.generic import FormView, UpdateView
 
 from .access import has_role, managed_meetings
 from .accounts import lock_account, managed_accounts, save_account, set_account_active
-from .forms import MeetingCreationForm, MeetingEditForm, UserManagementForm
+from .forms import MeetingCreationForm, MeetingEditForm, ScheduleFormSet, UserManagementForm
+from .models import Meeting
+from .services import apply_meeting_queue_changes
 from .workspace import global_statistics, record_meeting_update, workspace_context
 
 
@@ -77,7 +79,8 @@ def _managed_meeting(user, meeting_id):
     return meeting
 
 
-def _save_form(form, request, *, created):
+def _save_form(form, schedules, request, *, created):
+    previous = None if created else Meeting.objects.get(pk=form.instance.pk)
     with transaction.atomic():
         meeting = form.save(commit=False)
         meeting.updated_by = request.user
@@ -85,9 +88,14 @@ def _save_form(form, request, *, created):
             meeting.created_by = request.user
             meeting.administrator = request.user
         meeting.save()
+        schedules.instance = meeting
+        schedules.save()
         if not created:
-            changed = {"starts_at" if name in ("starts_date", "starts_time") else name for name in form.changed_data}
+            changed = set(form.changed_data)
+            if schedules.has_changed():
+                changed.add("schedules")
             record_meeting_update(request, meeting, changed)
+            apply_meeting_queue_changes(meeting, previous.call_phase, previous.max_call_attempts, request.user)
     return meeting
 
 
@@ -95,12 +103,36 @@ class MeetingFormMixin:
     http_method_names = ["get", "post"]
     success_url = reverse_lazy("meeting-management")
 
+    def get_schedules(self, instance):
+        return ScheduleFormSet(
+            self.request.POST if self.request.method == "POST" else None, instance=instance, prefix="schedules",
+        )
+
     def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.setdefault("schedules", self.get_schedules(getattr(self, "object", None) or Meeting()))
         return {
             **workspace_context(self.request),
-            **super().get_context_data(**kwargs),
+            **context,
             "meeting_timezone": timezone.get_current_timezone_name(),
         }
+
+    def form_valid(self, form):
+        schedules = self.get_schedules(form.instance)
+        if not schedules.is_valid():
+            return self.render_to_response(self.get_context_data(form=form, schedules=schedules))
+        created = isinstance(self, MeetingManagementView)
+        try:
+            meeting = _save_form(form, schedules, self.request, created=created)
+        except IntegrityError:
+            form.add_error(None, "Hay dos horarios con la misma fecha y hora.")
+            return self.render_to_response(self.get_context_data(form=form, schedules=schedules))
+        return self.saved(meeting)
+
+    def form_invalid(self, form):
+        return self.render_to_response(
+            self.get_context_data(form=form, schedules=self.get_schedules(form.instance)),
+        )
 
 
 class MeetingManagementView(LoginRequiredMixin, PermissionRequiredMixin, MeetingFormMixin, FormView):
@@ -111,18 +143,13 @@ class MeetingManagementView(LoginRequiredMixin, PermissionRequiredMixin, Meeting
     def has_permission(self):
         return super().has_permission() and has_role(self.request.user, "ADMINISTRADOR")
 
-    def form_valid(self, form):
-        try:
-            meeting = _save_form(form, self.request, created=True)
-        except IntegrityError:
-            form.add_error("number", "Ya existe una reunión con ese número en esa fecha.")
-            return self.form_invalid(form)
+    def saved(self, meeting):
         self.request.session["active_meeting"] = str(meeting.pk)
         messages.success(self.request, "Reunión creada sin participantes y seleccionada como activa.")
         return redirect(self.get_success_url())
 
     def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "meetings": managed_meetings(self.request.user)}
+        return {**super().get_context_data(**kwargs), "meetings": managed_meetings(self.request.user).prefetch_related("schedules")}
 
 
 class MeetingEditView(LoginRequiredMixin, MeetingFormMixin, UpdateView):
@@ -133,12 +160,7 @@ class MeetingEditView(LoginRequiredMixin, MeetingFormMixin, UpdateView):
     def get_object(self, queryset=None):
         return _managed_meeting(self.request.user, self.kwargs["meeting_id"])
 
-    def form_valid(self, form):
-        try:
-            _save_form(form, self.request, created=False)
-        except IntegrityError:
-            form.add_error("number", "Ya existe una reunión con ese número en esa fecha.")
-            return self.form_invalid(form)
+    def saved(self, meeting):
         messages.success(self.request, "Reunión actualizada.")
         return redirect(self.get_success_url())
 

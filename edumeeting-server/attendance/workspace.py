@@ -1,14 +1,20 @@
+from datetime import timedelta
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Max
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views import View
 
 from .access import accessible_meetings, active_meeting, has_role, require_meeting_role
 from .forms import MeetingMembersForm, ParticipantRegistrationForm
-from .models import AttendanceRecord, AuditEvent, CallAttempt, CallTask, Meeting, MessageTemplate, Participant
+from .models import (
+    AttendanceRecord, AuditEvent, CallAttempt, CallTask, Meeting, MessageTemplate, Participant, RealtimeEvent,
+)
 
 
 def capabilities(user, meeting):
@@ -83,11 +89,24 @@ def meeting_statistics(meeting):
     users = get_user_model().objects.filter(pk__in=user_ids).order_by("username")
     return {
         "meeting_id": str(meeting.pk), "meeting_name": meeting.name,
+        "call_phase": meeting.call_phase,
+        "call_phase_label": meeting.get_call_phase_display(),
         "registered": participants.count(),
         "pending_calls": tasks.filter(status__in=("pending", "follow_up")).count(),
         "completed_calls": tasks.filter(status="completed").count(),
         "call_attempts": attempts.count(),
         "accepted": participants.filter(invitation_status="accepted").count(),
+        "confirmed": participants.filter(attendance_confirmation=Participant.AttendanceConfirmation.CONFIRMED).count(),
+        "will_not_attend": participants.filter(
+            attendance_confirmation=Participant.AttendanceConfirmation.WILL_NOT_ATTEND,
+        ).count(),
+        "schedules": [{
+            "id": str(schedule.pk), "label": schedule.label(), "starts_at": schedule.starts_at,
+            "accepted": schedule.participants.filter(invitation_status="accepted").count(),
+            "confirmed": schedule.participants.filter(
+                attendance_confirmation=Participant.AttendanceConfirmation.CONFIRMED,
+            ).count(),
+        } for schedule in meeting.schedules.all()],
         "users": [{
             "id": user.pk, "username": user.get_username(),
             "registered": participants.filter(created_by=user).count(),
@@ -97,22 +116,94 @@ def meeting_statistics(meeting):
     }
 
 
+def call_board(meeting):
+    """Live state of each operator's calls in the meeting, for its administrator."""
+    now = timezone.now()
+    last_event_id = RealtimeEvent.objects.aggregate(last=Max("pk"))["last"] or 0
+    tasks = CallTask.objects.filter(meeting=meeting)
+    live = {
+        task.assignee_id: task
+        for task in tasks.filter(
+            status__in=(CallTask.Status.ASSIGNED, CallTask.Status.IN_PROGRESS), lease_expires_at__gt=now,
+        ).exclude(assignee=None).select_related("participant").order_by("updated_at")
+    }
+    attempts = CallAttempt.objects.filter(task__meeting=meeting)
+    since = now - timedelta(hours=24)
+    operators = []
+    for user in meeting.operators.order_by("username"):
+        task = live.get(user.pk)
+        last = attempts.filter(operator=user).select_related("participant").order_by("-created_at").first()
+        if not user.is_active:
+            state, label = "inactive", "Cuenta desactivada"
+        elif task is not None:
+            state, label = "on_call", "En llamada"
+        else:
+            state, label = "idle", "Sin llamada asignada"
+        operators.append({
+            "id": user.pk,
+            "username": user.get_username(),
+            "full_name": user.get_full_name(),
+            "state": state,
+            "state_label": label,
+            "current_call": None if task is None else {
+                "task_id": str(task.id),
+                "participant": task.participant.full_name,
+                "status": task.status,
+                "status_label": task.get_status_display(),
+                "since": task.updated_at,
+                "lease_expires_at": task.lease_expires_at,
+            },
+            "last_attempt": None if last is None else {
+                "participant": last.participant.full_name,
+                "outcome": last.outcome,
+                "outcome_label": last.get_outcome_display(),
+                "at": last.created_at,
+            },
+            "call_attempts": attempts.filter(operator=user).count(),
+            "attempts_last_24h": attempts.filter(operator=user, created_at__gte=since).count(),
+            "accepted": attempts.filter(operator=user, outcome=CallAttempt.Outcome.ACCEPTED).count(),
+        })
+    return {
+        "meeting_id": str(meeting.pk),
+        "meeting_name": meeting.name,
+        "call_phase": meeting.call_phase,
+        "call_phase_label": meeting.get_call_phase_display(),
+        "generated_at": now,
+        "queue": {
+            "pending": tasks.filter(status=CallTask.Status.PENDING, available_at__lte=now).count(),
+            "scheduled": tasks.filter(status=CallTask.Status.PENDING, available_at__gt=now).count(),
+            "follow_up": tasks.filter(status=CallTask.Status.FOLLOW_UP).count(),
+            "in_progress": len(live),
+            "completed": tasks.filter(status=CallTask.Status.COMPLETED).count(),
+            "exhausted": tasks.filter(status=CallTask.Status.EXHAUSTED).count(),
+            "to_confirm": tasks.filter(
+                purpose=CallTask.Purpose.CONFIRMATION, status__in=(CallTask.Status.PENDING, CallTask.Status.FOLLOW_UP),
+            ).count(),
+        },
+        "on_call": sum(1 for item in operators if item["state"] == "on_call"),
+        "operators": operators,
+        "last_event_id": last_event_id,
+    }
+
+
 def global_statistics():
     """Read-only overview of every meeting for the superuser."""
     meetings = []
-    for meeting in Meeting.objects.select_related("administrator").order_by("-active", "-starts_at", "number"):
+    for meeting in Meeting.objects.select_related("administrator").order_by("-active", "name", "created_at"):
         records = AttendanceRecord.objects.filter(effective_meeting=meeting)
         meetings.append({
             **meeting_statistics(meeting),
-            "number": meeting.number,
-            "starts_at": meeting.starts_at,
+            "starts_at": meeting.first_starts_at,
             "active": meeting.active,
             "administrator": meeting.administrator.get_username() if meeting.administrator else None,
             "attendance": records.filter(status=AttendanceRecord.Status.ACCEPTED).count(),
             "pending_review": records.filter(status=AttendanceRecord.Status.REVIEW).count(),
             "rejected": records.filter(status=AttendanceRecord.Status.REJECTED).count(),
         })
-    keys = ("registered", "pending_calls", "completed_calls", "call_attempts", "accepted", "attendance", "pending_review", "rejected")
+    keys = (
+        "registered", "pending_calls", "completed_calls", "call_attempts", "accepted", "confirmed", "will_not_attend",
+        "attendance", "pending_review", "rejected",
+    )
     totals = {key: sum(item[key] for item in meetings) for key in keys}
     totals["meetings"] = len(meetings)
     totals["active_meetings"] = sum(1 for item in meetings if item["active"])

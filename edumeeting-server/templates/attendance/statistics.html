@@ -16,6 +16,7 @@
     <div><strong>{{ statistics.totals.completed_calls }}</strong><span>Llamadas finalizadas</span></div>
     <div><strong>{{ statistics.totals.call_attempts }}</strong><span>Intentos</span></div>
     <div><strong>{{ statistics.totals.accepted }}</strong><span>Invitaciones aceptadas</span></div>
+    <div><strong>{{ statistics.totals.confirmed }}</strong><span>Asistencias confirmadas</span></div>
     <div><strong>{{ statistics.totals.attendance }}</strong><span>Asistencias</span></div>
     <div><strong>{{ statistics.totals.pending_review }}</strong><span>En revisión</span></div>
   </div>
@@ -23,11 +24,11 @@
 <section class="md-section">
   <h2 id="reuniones">Por reunión</h2>
   {% for item in statistics.meetings %}
-  <h3>{{ item.number }} · {{ item.meeting_name }} {% if item.active %}<span class="md-chip md-chip--ok">Activa</span>{% else %}<span class="md-chip md-chip--muted">Inactiva</span>{% endif %}</h3>
-  <p class="md-meta">{{ item.starts_at|date:"d/m/Y H:i" }} · Administrador: {{ item.administrator|default:"Sin asignar" }}</p>
+  <h3>{{ item.meeting_name }} {% if item.active %}<span class="md-chip md-chip--ok">Activa</span>{% else %}<span class="md-chip md-chip--muted">Inactiva</span>{% endif %} <span class="md-chip">{{ item.call_phase_label }}</span></h3>
+  <p class="md-meta">{% for schedule in item.schedules %}{{ schedule.label }}{% if not forloop.last %} · {% endif %}{% empty %}Sin horarios{% endfor %} · Administrador: {{ item.administrator|default:"Sin asignar" }}</p>
   <div class="md-typeset__table"><table>
-    <thead><tr><th scope="col">Registradas</th><th scope="col">Pendientes</th><th scope="col">Finalizadas</th><th scope="col">Intentos</th><th scope="col">Aceptadas</th><th scope="col">Asistencias</th><th scope="col">En revisión</th><th scope="col">Rechazadas</th></tr></thead>
-    <tbody><tr><td>{{ item.registered }}</td><td>{{ item.pending_calls }}</td><td>{{ item.completed_calls }}</td><td>{{ item.call_attempts }}</td><td>{{ item.accepted }}</td><td>{{ item.attendance }}</td><td>{{ item.pending_review }}</td><td>{{ item.rejected }}</td></tr></tbody>
+    <thead><tr><th scope="col">Registradas</th><th scope="col">Pendientes</th><th scope="col">Finalizadas</th><th scope="col">Intentos</th><th scope="col">Aceptadas</th><th scope="col">Confirmadas</th><th scope="col">Asistencias</th><th scope="col">En revisión</th><th scope="col">Rechazadas</th></tr></thead>
+    <tbody><tr><td>{{ item.registered }}</td><td>{{ item.pending_calls }}</td><td>{{ item.completed_calls }}</td><td>{{ item.call_attempts }}</td><td>{{ item.accepted }}</td><td>{{ item.confirmed }}</td><td>{{ item.attendance }}</td><td>{{ item.pending_review }}</td><td>{{ item.rejected }}</td></tr></tbody>
   </table></div>
   {% if item.users %}
   <details><summary>Actividad por usuario</summary>

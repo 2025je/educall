@@ -48,26 +48,41 @@ internal fun RoleWorkspace(
     val focusManager = LocalFocusManager.current
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (canManage) {
-            Text("Tu equipo, en un vistazo", style = MaterialTheme.typography.headlineLarge)
-            Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
-                runRequest {
-                    val assignment = withContext(Dispatchers.IO) { api.get("/api/v1/meetings/members/") }
-                    val report = withContext(Dispatchers.IO) { api.get("/api/v1/meetings/statistics/") }
-                    members = assignment
-                    registrars = assignment.getJSONArray("selected_registrars").intSet()
-                    operators = assignment.getJSONArray("selected_operators").intSet()
-                    statistics = report
+            fun loadTeam() = runRequest {
+                val assignment = withContext(Dispatchers.IO) { api.get("/api/v1/meetings/members/") }
+                val report = withContext(Dispatchers.IO) { api.get("/api/v1/meetings/statistics/") }
+                members = assignment
+                registrars = assignment.getJSONArray("selected_registrars").intSet()
+                operators = assignment.getJSONArray("selected_operators").intSet()
+                statistics = report
+            }
+            // Antes el formulario de asignación quedaba oculto hasta tocar el botón; ahora se carga al entrar.
+            var autoLoaded by remember { mutableStateOf(false) }
+            LaunchedEffect(busy) {
+                if (!autoLoaded && !busy && members == null) {
+                    autoLoaded = true
+                    loadTeam()
                 }
-            }) { ActionLabel("Consultar equipo y estadísticas", Icons.Default.Refresh) }
-            if (statistics == null) EmptyState(Icons.AutoMirrored.Filled.List, "Conoce el progreso", "Consulta los datos de la reunión activa para ver estadísticas y asignar cuentas.")
+            }
+            Text("Tu equipo, en un vistazo", style = MaterialTheme.typography.headlineLarge)
+            OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = ::loadTeam) {
+                ActionLabel("Actualizar equipo y estadísticas", Icons.Default.Refresh)
+            }
+            LiveCallBoard(api)
+            if (statistics == null) EmptyState(Icons.AutoMirrored.Filled.List, "Cargando tu equipo", "Si no aparece, toca Actualizar para consultar las estadísticas y asignar cuentas.")
             statistics?.let { report ->
                 Text(report.getString("meeting_name"), style = MaterialTheme.typography.titleLarge)
+                report.optString("call_phase_label").takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                }
                 val stats = listOf(
                     Triple("Registrados", report.getInt("registered"), Icons.Default.Person),
                     Triple("Pendientes", report.getInt("pending_calls"), Icons.Default.Call),
                     Triple("Finalizadas", report.getInt("completed_calls"), Icons.Default.CheckCircle),
                     Triple("Intentos", report.getInt("call_attempts"), Icons.Default.Phone),
                     Triple("Aceptaron", report.getInt("accepted"), Icons.Default.ThumbUp),
+                    Triple("Confirmaron", report.optInt("confirmed"), Icons.Default.Done),
+                    Triple("No asistirán", report.optInt("will_not_attend"), Icons.Default.Close),
                 )
                 stats.chunked(2).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
@@ -76,6 +91,21 @@ internal fun RoleWorkspace(
                     }
                 }
                 val users = report.getJSONArray("users")
+                val schedules = report.optJSONArray("schedules")
+                if (schedules != null && schedules.length() > 0) OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Por horario", style = MaterialTheme.typography.titleMedium)
+                        for (index in 0 until schedules.length()) {
+                            val schedule = schedules.getJSONObject(index)
+                            ListItem(
+                                headlineContent = { Text(schedule.optString("label"), fontWeight = FontWeight.Bold) },
+                                supportingContent = { Text("Aceptaron: ${schedule.optInt("accepted")} · Confirmaron: ${schedule.optInt("confirmed")}") },
+                                leadingContent = { Icon(Icons.Default.DateRange, null) },
+                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                            )
+                        }
+                    }
+                }
                 if (users.length() > 0) OutlinedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Actividad por usuario", style = MaterialTheme.typography.titleMedium)
@@ -99,7 +129,10 @@ internal fun RoleWorkspace(
                         for ((field, label) in listOf("registrars" to "Registradores de participantes", "operators" to "Operadores de llamadas")) {
                             Text(label, style = MaterialTheme.typography.titleMedium)
                             val choices = data.getJSONArray(field)
-                            if (choices.length() == 0) Text("No hay cuentas activas de este grupo.")
+                            if (choices.length() == 0) Text(
+                                "No hay cuentas activas de este grupo. El superusuario debe crearlas o activarlas en Usuarios y grupos.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                             for (index in 0 until choices.length()) {
                                 val user = choices.getJSONObject(index)
                                 val id = user.getInt("id")

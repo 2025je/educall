@@ -1,15 +1,17 @@
-{% if not active_meeting %}
+{% load static %}{% if not active_meeting %}
 <h1 id="seleccionar">Selecciona una reunión</h1>
 <p>Solo aparecen reuniones activas con administrador y con un rol asignado a tu cuenta. Elige una en el menú lateral, en <strong>Reunión activa</strong>.</p>
 {% if not available_meetings %}<div class="admonition warning"><p class="admonition-title">Sin reuniones disponibles</p><p>No tienes reuniones activas.{% if not can_create %} Solicita la asignación al administrador; las reuniones antiguas requieren primero revisión del superusuario.{% endif %}</p></div>{% endif %}
 {% if can_create %}<div class="admonition info"><p class="admonition-title">Administrador</p><p>Crea, edita o activa reuniones en <a href="{% url 'meeting-management' %}">Gestionar reuniones</a>. Después selecciónala para asignar usuarios y ver sus estadísticas.</p></div>{% endif %}
 {% else %}
-<h1>{{ active_meeting.number }} · {{ active_meeting.name }}</h1>
-<p class="md-meta">{{ active_meeting.starts_at|date:"d/m/Y H:i" }} · {{ active_meeting.location|default:"Sin lugar" }}</p>
+<h1>{{ active_meeting.name }}</h1>
+<p class="md-meta">{{ active_meeting.location|default:"Sin lugar" }} · <span class="md-chip">{{ active_meeting.get_call_phase_display }}</span></p>
+<p class="md-meta">Horarios: {% for schedule in active_meeting.schedules.all %}{{ schedule.label }}{% if not forloop.last %} · {% endif %}{% empty %}sin horarios{% endfor %}</p>
 <div class="md-grid">
   {% if can_manage %}
   <a class="md-grid__card" href="#asignaciones"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>Asignar usuarios</span><hr><span>Elige registradores y operadores para esta reunión.</span><span class="md-grid__more">→ Asignar</span></a>
   <a class="md-grid__card" href="#estadisticas"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3"/></svg>Estadísticas</span><hr><span>Registros, llamadas e invitaciones aceptadas por usuario.</span><span class="md-grid__more">→ Ver estadísticas</span></a>
+  <a class="md-grid__card" href="#llamadas-en-vivo"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/></svg>Llamadas en tiempo real</span><hr><span>Qué operador está llamando, a quién y su último resultado.</span><span class="md-grid__more">→ Monitorear</span></a>
   {% endif %}
   {% if can_register %}
   <a class="md-grid__card" href="#registro"><span class="md-grid__title"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>Registrar persona</span><hr><span>Agrega datos de contacto a la cola de llamadas.</span><span class="md-grid__more">→ Registrar</span></a>
@@ -42,6 +44,25 @@
     <button class="md-button">Guardar asignaciones</button>
   </form>
 </section>
+<section class="md-section" id="call-board" data-endpoint="/api/v1/meetings/call-board/" data-stream="/api/v1/attendance/stream/">
+  <h2 id="llamadas-en-vivo">Llamadas en tiempo real</h2>
+  <p>Estado de las llamadas de los operadores asignados a esta reunión. Se actualiza automáticamente cuando un operador toma o cierra una llamada.</p>
+  <p class="md-meta" id="call-board-status" aria-live="polite">Cargando…</p>
+  <div class="md-stats" id="call-board-queue">
+    <div><strong data-queue="on_call">–</strong><span>Operadores en llamada</span></div>
+    <div><strong data-queue="pending">–</strong><span>Pendientes</span></div>
+    <div><strong data-queue="scheduled">–</strong><span>Reintentos programados</span></div>
+    <div><strong data-queue="follow_up">–</strong><span>En seguimiento</span></div>
+    <div><strong data-queue="to_confirm">–</strong><span>Por confirmar</span></div>
+    <div><strong data-queue="exhausted">–</strong><span>Sin respuesta</span></div>
+    <div><strong data-queue="completed">–</strong><span>Finalizadas</span></div>
+  </div>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>Operador</th><th>Estado</th><th>Llamada actual</th><th>Último resultado</th><th>Intentos (24 h)</th><th>Aceptadas</th></tr></thead>
+    <tbody id="call-board-rows"><tr><td colspan="6">Cargando…</td></tr></tbody>
+  </table></div>
+  <script src="{% static 'attendance/call_board.js' %}" defer></script>
+</section>
 <section class="md-section">
   <h2 id="estadisticas">Estadísticas de la reunión</h2>
   <div class="md-stats">
@@ -50,7 +71,18 @@
     <div><strong>{{ statistics.completed_calls }}</strong><span>Finalizadas</span></div>
     <div><strong>{{ statistics.call_attempts }}</strong><span>Intentos</span></div>
     <div><strong>{{ statistics.accepted }}</strong><span>Invitaciones aceptadas</span></div>
+    <div><strong>{{ statistics.confirmed }}</strong><span>Asistencias confirmadas</span></div>
+    <div><strong>{{ statistics.will_not_attend }}</strong><span>No asistirán</span></div>
   </div>
+  <h3>Por horario</h3>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th>Horario</th><th>Aceptaron</th><th>Confirmaron</th></tr></thead>
+    <tbody>
+    {% for schedule in statistics.schedules %}
+    <tr><td>{{ schedule.label }}</td><td>{{ schedule.accepted }}</td><td>{{ schedule.confirmed }}</td></tr>
+    {% empty %}<tr><td colspan="3">La reunión no tiene horarios.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
   <h3>Actividad por usuario</h3>
   <div class="md-typeset__table"><table>
     <thead><tr><th>Usuario</th><th>Personas registradas</th><th>Intentos</th><th>Aceptaciones</th></tr></thead>

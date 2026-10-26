@@ -29,6 +29,7 @@ from .models import (
 )
 from .services import DomainError, export_attendance_package, import_attendance_results, issue_attendance_code
 from .tasks import generate_attendance_package
+from attendance.testing import create_meeting
 
 # Hash de prueba con una iteración; set_attendance_pin usa el número real de iteraciones.
 TEST_PIN_HASH = "pbkdf2_sha256$1$salt$Ha5h"
@@ -57,11 +58,11 @@ class OfflineAttendanceAdministrationTests(TestCase):
         self.registrar = users.create_user("registrar")
         self.registrar.groups.add(Group.objects.get(name="REGISTRAR"))
         self.root = users.create_superuser("root")
-        self.meeting = Meeting.objects.create(
+        self.meeting = create_meeting(
             number=1, name="Propia", starts_at=timezone.now(), administrator=self.owner, attendance_pin_hash=TEST_PIN_HASH,
         )
         self.meeting.operators.add(self.operator)
-        self.foreign = Meeting.objects.create(
+        self.foreign = create_meeting(
             number=2, name="Ajena", starts_at=timezone.now(), administrator=self.other_admin, attendance_pin_hash=TEST_PIN_HASH,
         )
         self.foreign.operators.add(self.operator)

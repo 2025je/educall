@@ -11,6 +11,7 @@ from django.utils import timezone
 from .access import accessible_meetings
 from .models import CallTask, Meeting, MessageLog, MessageTemplate, OperatorProfile, Participant
 from .services import assign_next_call, record_call_outcome
+from attendance.testing import create_meeting
 
 
 class MeetingWorkspaceTests(TestCase):
@@ -26,8 +27,8 @@ class MeetingWorkspaceTests(TestCase):
         self.operator = self.user("operator", "OPERADOR")
         self.outsider = self.user("outsider", "OPERADOR")
         OperatorProfile.objects.create(user=self.operator, initials="OP")
-        self.a = Meeting.objects.create(number=1, name="Reunión A", starts_at=timezone.now(), administrator=self.admin)
-        self.b = Meeting.objects.create(number=2, name="Reunión B", starts_at=timezone.now(), administrator=self.other_admin)
+        self.a = create_meeting(number=1, name="Reunión A", starts_at=timezone.now(), administrator=self.admin)
+        self.b = create_meeting(number=2, name="Reunión B", starts_at=timezone.now(), administrator=self.other_admin)
         self.a.registrars.add(self.registrar)
         self.a.operators.add(self.operator)
         self.b.operators.add(self.outsider)
@@ -60,7 +61,7 @@ class MeetingWorkspaceTests(TestCase):
         self.assertEqual(set(accessible_meetings(self.outsider)), {self.a, self.b})
 
     def test_pending_legacy_meetings_are_not_exposed(self):
-        legacy = Meeting.objects.create(number=3, name="Legacy", starts_at=timezone.now())
+        legacy = create_meeting(number=3, name="Legacy", starts_at=timezone.now())
         legacy.operators.add(self.operator)
         self.assertNotIn(legacy, accessible_meetings(self.operator))
         self.login(self.operator)
@@ -153,13 +154,13 @@ class MeetingWorkspaceTests(TestCase):
         self.login(self.admin, self.a)
         response = self.post("api-meeting-members", {
             "registrars": [], "operators": [], "administrator": self.other_admin.pk,
-            "name": "Overwrite", "next_code_sequence": 500,
+            "name": "Overwrite", "call_phase": "confirmation",
         })
         self.assertEqual(response.status_code, 200)
         self.a.refresh_from_db()
         self.assertEqual(self.a.administrator, self.admin)
         self.assertEqual(self.a.name, "Reunión A")
-        self.assertEqual(self.a.next_code_sequence, 1)
+        self.assertEqual(self.a.call_phase, "invitation")
 
     def test_operator_can_search_list_and_claim_only_active_meeting(self):
         self.login(self.operator, self.a)

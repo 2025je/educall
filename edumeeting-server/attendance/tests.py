@@ -47,13 +47,14 @@ from .services import (
     record_call_outcome,
     resolve_attendance_conflict,
 )
+from .testing import create_meeting
 
 
 class AttendanceServicesTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user("jose", password="test-password")
         OperatorProfile.objects.create(user=self.user, initials="JU")
-        self.meeting = Meeting.objects.create(
+        self.meeting = create_meeting(
             number=3, name="Reunión de prueba", starts_at=timezone.now() + timedelta(days=1)
         )
         self.owner = get_user_model().objects.create_user("meeting_owner")
@@ -72,9 +73,7 @@ class AttendanceServicesTests(TestCase):
 
     @staticmethod
     def expected_code(meeting, sequence):
-        meeting.refresh_from_db()
-        day = timezone.localtime(meeting.starts_at)
-        return f"JU-{day:%d%m%y}-{meeting.number:02d}-{sequence:03d}"
+        return f"JU-{sequence:04d}"
 
     def task(self, participant=None, created_at=None, **kwargs):
         task = CallTask.objects.create(
@@ -104,7 +103,9 @@ class AttendanceServicesTests(TestCase):
         task = self.task()
         with self.captureOnCommitCallbacks(execute=True):
             assigned = assign_next_call(self.user)
-            code = record_call_outcome(task.pk, self.user, CallAttempt.Outcome.ACCEPTED)
+            code = record_call_outcome(
+                task.pk, self.user, CallAttempt.Outcome.ACCEPTED, schedule_id=self.meeting.schedules.get().pk,
+            )
         self.assertEqual(code.code, self.expected_code(self.meeting, 1))
         self.participant.refresh_from_db()
         self.assertEqual(self.participant.invitation_status, Participant.InvitationStatus.ACCEPTED)
@@ -115,7 +116,7 @@ class AttendanceServicesTests(TestCase):
     def test_do_not_contact_removes_participant_from_future_assignments(self):
         task = self.task()
         assign_next_call(self.user)
-        other_meeting = Meeting.objects.create(number=9, name="Otra", starts_at=timezone.now())
+        other_meeting = create_meeting(number=9, name="Otra", starts_at=timezone.now())
         another_task = CallTask.objects.create(participant=self.participant, meeting=other_meeting)
         record_call_outcome(task.pk, self.user, CallAttempt.Outcome.DO_NOT_CONTACT)
         self.assertTrue(Participant.objects.get(pk=self.participant.pk).do_not_contact)
@@ -143,13 +144,13 @@ class AttendanceServicesTests(TestCase):
         self.participant.invitation_status = Participant.InvitationStatus.ACCEPTED
         self.participant.save(update_fields=("invitation_status",))
         prior = issue_attendance_code(self.participant, self.meeting, self.user)
-        destination = Meeting.objects.create(number=4, name="Destino", starts_at=timezone.now())
+        destination = create_meeting(number=4, name="Destino", starts_at=timezone.now())
         change_origin_meeting(self.participant.pk, destination.pk, self.user, "Cambio solicitado")
         prior.refresh_from_db()
         self.participant.refresh_from_db()
         current = AttendanceCode.objects.get(participant=self.participant, meeting=destination, valid=True)
         self.assertFalse(prior.valid)
-        self.assertEqual(current.code, self.expected_code(destination, 1))
+        self.assertEqual(current.code, self.expected_code(destination, 2))
         self.assertEqual(self.participant.origin_meeting_id, destination.pk)
         self.assertEqual(ParticipantMeetingChange.objects.count(), 1)
 
@@ -225,7 +226,8 @@ class AttendanceServicesTests(TestCase):
 
     def test_inbound_acceptance_is_recorded_and_generates_code(self):
         code = record_inbound_call(
-            self.participant.pk, self.user, CallAttempt.Outcome.ACCEPTED, "Llamada devuelta"
+            self.participant.pk, self.user, CallAttempt.Outcome.ACCEPTED, "Llamada devuelta",
+            schedule_id=self.meeting.schedules.get().pk,
         )
         self.assertEqual(code.code, self.expected_code(self.meeting, 1))
         self.assertEqual(
@@ -246,6 +248,7 @@ class AttendanceServicesTests(TestCase):
                 "participant_id": str(self.participant.pk),
                 "outcome": CallAttempt.Outcome.ACCEPTED,
                 "notes": "Llamada devuelta",
+                "schedule_id": str(self.meeting.schedules.get().pk),
             }),
             content_type="application/json",
         )
@@ -450,7 +453,7 @@ class AttendanceServicesTests(TestCase):
         )
 
     def test_cross_meeting_package_includes_signed_eligible_code_when_enabled(self):
-        other_meeting = Meeting.objects.create(
+        other_meeting = create_meeting(
             number=8,
             name="Reunión alternativa",
             starts_at=timezone.now(),
@@ -496,7 +499,7 @@ class PostgresConcurrencyTests(TransactionTestCase):
         self.user_two = get_user_model().objects.create_user("operator_two", password="test")
         OperatorProfile.objects.create(user=self.user_one, initials="OP")
         OperatorProfile.objects.create(user=self.user_two, initials="OT")
-        self.meeting = Meeting.objects.create(number=11, name="Concurrencia", starts_at=timezone.now())
+        self.meeting = create_meeting(number=11, name="Concurrencia", starts_at=timezone.now())
         owner = get_user_model().objects.create_user("meeting_owner")
         owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.meeting.administrator = owner

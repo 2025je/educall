@@ -36,29 +36,77 @@ def validated_data(serializer):
     return serializer.validated_data
 
 
+def local_time_label(value):
+    """"HH:MM" for today in the server timezone, "dd/mm HH:MM" for another day."""
+    if value is None:
+        return None
+    local = timezone.localtime(value)
+    return local.strftime("%H:%M" if local.date() == timezone.localdate() else "%d/%m %H:%M")
+
+
+class ScheduleSerializer(serializers.Serializer):
+    id = serializers.UUIDField(label="Horario", required=False, allow_null=True)
+    starts_at = serializers.DateTimeField(label="Fecha y hora")
+    location = serializers.CharField(label="Lugar del horario", max_length=240, required=False, allow_blank=True, default="")
+    starts_at_local = serializers.SerializerMethodField()
+    label = serializers.SerializerMethodField()
+    participant_count = serializers.SerializerMethodField()
+
+    def get_starts_at_local(self, schedule) -> str:
+        return timezone.localtime(schedule.starts_at).strftime("%Y-%m-%d %H:%M")
+
+    def get_label(self, schedule) -> str:
+        return schedule.label()
+
+    def get_participant_count(self, schedule) -> int:
+        return schedule.participants.count()
+
+
 class MeetingSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    number = serializers.IntegerField(label="Número de reunión", min_value=1, max_value=99)
     name = serializers.CharField(label="Nombre", max_length=160)
-    starts_at = serializers.DateTimeField(label="Fecha y hora")
-    starts_at_local = serializers.SerializerMethodField()
     location = serializers.CharField(label="Lugar", max_length=240, required=False, allow_blank=True)
+    call_phase = serializers.ChoiceField(
+        label="Fase de llamadas", choices=Meeting.CallPhase.choices, required=False,
+        error_messages={"invalid_choice": "Fase inválida: usa invitation o confirmation."},
+    )
+    schedules = ScheduleSerializer(label="Horarios", many=True)
 
     class Meta:
         model = Meeting
-        fields = ("id", "number", "name", "starts_at", "starts_at_local", "location", "active")
+        fields = (
+            "id", "name", "location", "active", "call_phase", "schedules",
+            "call_lease_minutes", "retry_delay_minutes", "max_call_attempts", "follow_up_delay_minutes", "prioritize_follow_ups",
+        )
         read_only_fields = ("active",)
 
-    def get_starts_at_local(self, meeting) -> str:
-        return timezone.localtime(meeting.starts_at).strftime("%Y-%m-%d %H:%M")
+    def validate_schedules(self, value):
+        if not value:
+            raise serializers.ValidationError("Agrega al menos un horario.")
+        times = [item["starts_at"] for item in value]
+        if len(set(times)) != len(times):
+            raise serializers.ValidationError("Hay dos horarios con la misma fecha y hora.")
+        ids = [item["id"] for item in value if item.get("id")]
+        if len(set(ids)) != len(ids):
+            raise serializers.ValidationError("Un horario aparece dos veces.")
+        return value
 
-    def validate(self, attrs):
-        number = attrs.get("number", getattr(self.instance, "number", None))
-        starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
-        errors = Meeting.schedule_errors(number, starts_at, self.instance)
-        if errors:
-            raise serializers.ValidationError(errors)
-        return attrs
+    def create(self, validated_data):
+        from attendance.services import sync_meeting_schedules
+
+        schedules = validated_data.pop("schedules")
+        meeting = super().create(validated_data)
+        sync_meeting_schedules(meeting, schedules)
+        return meeting
+
+    def update(self, instance, validated_data):
+        from attendance.services import sync_meeting_schedules
+
+        schedules = validated_data.pop("schedules", None)
+        meeting = super().update(instance, validated_data)
+        if schedules is not None:
+            sync_meeting_schedules(meeting, schedules)
+        return meeting
 
 
 class MeetingUpdateSerializer(MeetingSerializer):
@@ -122,6 +170,28 @@ class ParticipantRegistrationSerializer(serializers.Serializer):
 class CallResultSerializer(serializers.Serializer):
     outcome = serializers.CharField(label="Resultado")
     notes = serializers.CharField(label="Notas", required=False, allow_blank=True, default="")
+    schedule_id = serializers.UUIDField(
+        label="Horario", required=False, allow_null=True, default=None,
+        help_text="Obligatorio con «accepted»; opcional con «confirmed» para cambiar de horario.",
+    )
+
+
+class CallOutcomeSerializer(CallResultSerializer):
+    follow_up_at = serializers.DateTimeField(
+        label="Hora del seguimiento", required=False, allow_null=True, default=None,
+        help_text="Solo con «follow_up». Si se omite se usa el retraso de seguimiento de la reunión.",
+    )
+
+
+class NextCallRequestSerializer(serializers.Serializer):
+    types = serializers.ListField(
+        label="Tipos de número", child=serializers.CharField(), required=False, default=list,
+        help_text="Solo en la fase 2: confirm, never_answered, new, follow_up. Vacío = todos.",
+    )
+
+
+class ScheduleChangeSerializer(serializers.Serializer):
+    schedule_id = serializers.UUIDField(label="Horario")
 
 
 class InboundCallSerializer(CallResultSerializer):
@@ -173,10 +243,21 @@ class TaskParticipantSerializer(serializers.ModelSerializer):
     id = serializers.CharField()
     name = serializers.CharField(source="full_name")
     origin_meeting = OriginMeetingField()
+    schedule_id = serializers.SerializerMethodField()
+    schedule_label = serializers.SerializerMethodField()
 
     class Meta:
         model = Participant
-        fields = ("id", "name", "phone", "origin_meeting", "invitation_status", "do_not_contact")
+        fields = (
+            "id", "name", "phone", "origin_meeting", "invitation_status", "do_not_contact",
+            "schedule_id", "schedule_label", "attendance_confirmation",
+        )
+
+    def get_schedule_id(self, participant) -> str | None:
+        return str(participant.schedule_id) if participant.schedule_id else None
+
+    def get_schedule_label(self, participant) -> str:
+        return participant.schedule.label() if participant.schedule_id else ""
 
 
 class CallTaskSerializer(serializers.ModelSerializer):
@@ -184,14 +265,31 @@ class CallTaskSerializer(serializers.ModelSerializer):
     participant = TaskParticipantSerializer()
     meeting = serializers.SerializerMethodField()
     history = serializers.SerializerMethodField()
+    queue_type = serializers.SerializerMethodField()
 
     class Meta:
         model = CallTask
-        fields = ("id", "participant", "meeting", "lease_expires_at", "history")
+        fields = ("id", "participant", "meeting", "purpose", "queue_type", "lease_expires_at", "history")
 
-    @extend_schema_field({"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}})
+    @extend_schema_field({"type": "object", "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"}, "call_phase": {"type": "string"},
+        "schedules": {"type": "array", "items": {"type": "object", "properties": {
+            "id": {"type": "string"}, "label": {"type": "string"}, "starts_at": {"type": "string", "format": "date-time"},
+        }}},
+    }})
     def get_meeting(self, task):
-        return {"id": str(task.meeting_id), "name": task.meeting.name}
+        return {
+            "id": str(task.meeting_id), "name": task.meeting.name, "call_phase": task.meeting.call_phase,
+            "schedules": [
+                {"id": str(schedule.pk), "label": schedule.label(), "starts_at": schedule.starts_at}
+                for schedule in task.meeting.schedules.all()
+            ],
+        }
+
+    def get_queue_type(self, task) -> str:
+        from attendance.services import task_queue_type
+
+        return task_queue_type(task)
 
     @extend_schema_field(CallAttemptSerializer(many=True))
     def get_history(self, task):
@@ -203,13 +301,24 @@ class ParticipantSearchSerializer(serializers.ModelSerializer):
     id = serializers.CharField()
     name = serializers.CharField(source="full_name")
     origin_meeting = serializers.SerializerMethodField()
+    schedule_id = serializers.SerializerMethodField()
+    schedule_label = serializers.SerializerMethodField()
 
     class Meta:
         model = Participant
-        fields = ("id", "name", "phone", "origin_meeting", "do_not_contact", "contact_authorized", "invitation_status")
+        fields = (
+            "id", "name", "phone", "origin_meeting", "do_not_contact", "contact_authorized", "invitation_status",
+            "schedule_id", "schedule_label", "attendance_confirmation",
+        )
 
     def get_origin_meeting(self, participant) -> str | None:
         return str(participant.origin_meeting_id) if participant.origin_meeting_id else None
+
+    def get_schedule_id(self, participant) -> str | None:
+        return str(participant.schedule_id) if participant.schedule_id else None
+
+    def get_schedule_label(self, participant) -> str:
+        return participant.schedule.label() if participant.schedule_id else ""
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):

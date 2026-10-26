@@ -20,6 +20,7 @@ from rest_framework.test import APIClient
 from attendance.consumers import AttendanceConsumer
 from attendance.models import AttendancePackage, AttendanceRecord, CallTask, Meeting, PackageExportJob, Participant, RealtimeEvent
 from attendance.tasks import generate_attendance_package, purge_expired_exports
+from attendance.testing import create_meeting
 
 
 class BackendIntegrationTests(TestCase):
@@ -30,12 +31,12 @@ class BackendIntegrationTests(TestCase):
         self.operator.groups.add(Group.objects.get(name="OPERADOR"))
         self.owner = get_user_model().objects.create_user("owner", password="Owner-Testing-Canyon-982!")
         self.owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
-        self.meeting = Meeting.objects.create(
+        self.meeting = create_meeting(
             number=1, name="Reunión", starts_at=timezone.now(), administrator=self.owner,
             attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
         )
         self.meeting.operators.add(self.operator)
-        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
+        self.other = create_meeting(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
 
     def tokens(self, user=None):
         user = user or self.operator
@@ -159,7 +160,7 @@ class BackendIntegrationTests(TestCase):
         self.assertNotIn("password", json.dumps(entry.changes))
         self.client.logout()
         client, _ = self.bearer(self.root)
-        payload = {"number": 3, "name": "Nueva", "starts_at": timezone.now().isoformat()}
+        payload = {"name": "Nueva", "schedules": [{"starts_at": timezone.now().isoformat()}]}
         self.assertEqual(client.post(reverse("meetings"), payload, format="json").status_code, 403)
         client, _ = self.bearer(self.owner)
         response = client.post(reverse("meetings"), payload, format="json")
@@ -273,9 +274,9 @@ class WebsocketIntegrationTests(TransactionTestCase):
         self.root = get_user_model().objects.create_superuser("root", password=None)
         self.owner = get_user_model().objects.create_user("owner")
         self.owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
-        self.meeting = Meeting.objects.create(number=1, name="Reunión", starts_at=timezone.now(), administrator=self.owner)
+        self.meeting = create_meeting(number=1, name="Reunión", starts_at=timezone.now(), administrator=self.owner)
         self.meeting.operators.add(self.user)
-        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
+        self.other = create_meeting(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
 
     def connection(self, meeting=None, user=None):
         communicator = WebsocketCommunicator(URLRouter([

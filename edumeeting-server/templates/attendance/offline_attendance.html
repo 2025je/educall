@@ -7,7 +7,7 @@
 {% block breadcrumbs %} <span>›</span> <a href="{% url 'meeting-management' %}">Gestionar reuniones</a> <span>›</span> <span>Asistencia offline</span>{% endblock %}
 {% block toc %}<li><a class="md-nav__link" href="#pin">PIN de la app</a></li><li><a class="md-nav__link" href="#exportar">Exportar paquete</a></li><li><a class="md-nav__link" href="#importar">Importar y combinar</a></li><li><a class="md-nav__link" href="#conflictos">Conflictos</a></li>{% endblock %}
 {% block content %}
-<h1>Asistencia offline · {{ meeting.number }} {{ meeting.name }}</h1>
+<h1>Asistencia offline · {{ meeting.name }}</h1>
 <p>Registros de esta reunión: <span class="md-chip md-chip--ok">{{ totals.accepted }} aceptados</span> <span class="md-chip">{{ totals.review }} en revisión</span> <span class="md-chip md-chip--muted">{{ totals.rejected }} rechazados</span></p>
 
 <section class="md-section">

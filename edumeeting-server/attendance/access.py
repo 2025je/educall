@@ -33,7 +33,7 @@ def managed_meetings(user):
     """Meetings the user may create/edit/deactivate, including inactive ones."""
     if not has_role(user, "ADMINISTRADOR"):
         return Meeting.objects.none()
-    return Meeting.objects.order_by("-active", "number").filter(administrator=user)
+    return Meeting.objects.order_by("-active", "name").filter(administrator=user)
 
 
 def require_meeting_administration(user, meeting):
@@ -58,6 +58,20 @@ def require_meeting_role(user, meeting, role):
         allowed = False
     if not allowed:
         raise PermissionDenied("No tienes ese rol asignado en esta reunión.")
+
+
+REALTIME_ROLES = ("OPERADOR", "ADMINISTRADOR")
+
+
+def require_realtime_access(user, meeting):
+    """Operators follow their queue; the meeting administrator monitors the operators' calls."""
+    for role in REALTIME_ROLES:
+        try:
+            require_meeting_role(user, meeting, role)
+        except PermissionDenied:
+            continue
+        return
+    raise PermissionDenied("No tienes ese rol asignado en esta reunión.")
 
 
 def active_meeting(request, role=None):

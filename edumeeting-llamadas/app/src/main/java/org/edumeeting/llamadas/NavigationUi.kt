@@ -99,8 +99,8 @@ internal fun OutcomeGrid(options: List<Pair<String, String>>, enabled: Boolean, 
                         contentPadding = PaddingValues(12.dp),
                     ) {
                         ActionLabel(label, when (outcome) {
-                            "accepted" -> Icons.Default.CheckCircle
-                            "declined", "do_not_contact" -> Icons.Default.Close
+                            "accepted", "confirmed" -> Icons.Default.CheckCircle
+                            "declined", "do_not_contact", "will_not_attend" -> Icons.Default.Close
                             "no_answer" -> Icons.Default.Notifications
                             "follow_up" -> Icons.Default.DateRange
                             "contacted" -> Icons.Default.Call

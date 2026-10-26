@@ -1,23 +1,26 @@
 (function () {
-  var preview = document.getElementById("code-preview");
-  if (!preview) return;
-  var number = document.getElementById("id_number");
-  var day = document.getElementById("id_starts_date");
-  var output = preview.querySelector("[data-code]");
-  var parts = preview.querySelector("[data-parts]");
+  document.querySelectorAll("[data-schedules]").forEach(function (fieldset) {
+    var prefix = fieldset.getAttribute("data-prefix");
+    var total = fieldset.querySelector("#id_" + prefix + "-TOTAL_FORMS");
+    var rows = fieldset.querySelector("[data-schedule-rows]");
+    var template = fieldset.querySelector("[data-schedule-template]");
+    var add = fieldset.querySelector("[data-add-schedule]");
+    if (!total || !rows || !template || !add) return;
 
-  function render() {
-    var n = parseInt(number.value, 10);
-    var nn = n >= 1 && n <= 99 ? String(n).padStart(2, "0") : "NN";
-    var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.value || "");
-    var date = match ? match[3] + match[2] + match[1].slice(2) : "DDMMAA";
-    output.textContent = "JU-" + date + "-" + nn + "-001";
-    parts.textContent = "JU = iniciales del operador · " + date + " = fecha (día, mes, año) · " + nn +
-      " = número de reunión · 001 = orden del invitado";
-  }
+    add.addEventListener("click", function () {
+      var index = parseInt(total.value, 10);
+      var html = template.innerHTML.replace(/__prefix__/g, String(index));
+      rows.insertAdjacentHTML("beforeend", html);
+      total.value = String(index + 1);
+      var inserted = rows.lastElementChild;
+      var first = inserted && inserted.querySelector("input[type=date]");
+      if (first) first.focus();
+    });
 
-  [number, day].forEach(function (field) {
-    if (field) { field.addEventListener("input", render); field.addEventListener("change", render); }
+    // Las filas nuevas se quitan sin más (el formset las trata como vacías); las guardadas usan «Eliminar».
+    rows.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-remove-schedule]");
+      if (button) button.closest("[data-schedule-row]").remove();
+    });
   });
-  render();
 })();

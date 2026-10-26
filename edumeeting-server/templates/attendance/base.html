@@ -60,7 +60,7 @@
           <select id="active-meeting" name="meeting_id" required>
             <option value="">Selecciona una reunión</option>
             {% for meeting in available_meetings %}
-            <option value="{{ meeting.pk }}"{% if active_meeting.pk == meeting.pk %} selected{% endif %}>{{ meeting.number }} · {{ meeting.name }}</option>
+            <option value="{{ meeting.pk }}"{% if active_meeting.pk == meeting.pk %} selected{% endif %}>{{ meeting.name }}</option>
             {% endfor %}
           </select>
           <button class="md-button md-button--small md-button--block">Cambiar reunión</button>

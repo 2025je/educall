@@ -132,6 +132,25 @@ class DjangoSessionApiTest {
     }
 
     @Test
+    fun awaitEventReadsTheMeetingStreamFromTheGivenCursor() {
+        api.meetingId = "meeting-123"
+        server.enqueue(MockResponse()
+            .addHeader("Content-Type", "text/event-stream")
+            .setBody(": keep-alive\n\nid: 5\nevent: attendance\ndata: {}\n\nid: 6\nevent: calls\ndata: {\"event\":\"updated\"}\n\n"))
+        assertEquals(StreamResult(6, true), kotlinx.coroutines.runBlocking { api.awaitEvent("calls", 4) })
+        val request = server.takeRequest()
+        assertEquals("/api/v1/attendance/stream/?last_event_id=4", request.path)
+        assertEquals("text/event-stream", request.getHeader("Accept"))
+        assertEquals("meeting-123", request.getHeader("X-EduMeeting-Meeting"))
+
+        server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"Sin permiso"}"""))
+        assertEquals(
+            "Sin permiso",
+            assertThrows(IllegalStateException::class.java) { kotlinx.coroutines.runBlocking { api.awaitEvent("calls", 6) } }.message,
+        )
+    }
+
+    @Test
     fun rejectsInvalidCredentialsMissingCsrfAndInsecureUrls() {
         server.enqueue(MockResponse().setBody("""<input name="csrfmiddlewaretoken" value="token">"""))
         server.enqueue(MockResponse().setBody("Invalid login"))

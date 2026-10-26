@@ -90,6 +90,11 @@ private data class CallTaskInfo(
     val meeting: String,
     val origin: String,
     val history: List<String>,
+    val purpose: String = PHASE_INVITATION,
+    val queueType: String = "",
+    val scheduleId: String? = null,
+    val scheduleLabel: String = "",
+    val schedules: List<ScheduleOption> = emptyList(),
 )
 
 private data class PersonInfo(
@@ -100,18 +105,13 @@ private data class PersonInfo(
     val doNotContact: Boolean,
     val authorized: Boolean,
     val invitationStatus: String,
+    val scheduleId: String? = null,
+    val scheduleLabel: String = "",
+    val confirmation: String = "",
 )
 
 private data class MessageDraft(val logId: Int, val text: String, val url: String)
 
-private data class ManagedMeeting(
-    val id: String,
-    val number: Int,
-    val name: String,
-    val startsAtLocal: String,
-    val location: String,
-    val active: Boolean,
-)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -146,11 +146,18 @@ private fun DialScreen() {
     var canManage by remember { mutableStateOf(false) }
     var canRegister by remember { mutableStateOf(false) }
     var canOperate by remember { mutableStateOf(false) }
-    var meetingNumber by remember { mutableStateOf("") }
     var meetingName by remember { mutableStateOf("") }
-    var meetingDay by remember { mutableStateOf("") }
-    var meetingTime by remember { mutableStateOf("") }
     var meetingLocation by remember { mutableStateOf("") }
+    var meetingSchedules by remember { mutableStateOf(listOf(ScheduleDraft())) }
+    var meetingQueue by remember { mutableStateOf(QueueSettings()) }
+    var meetingPhase by remember { mutableStateOf(PHASE_INVITATION) }
+    var activePhase by remember { mutableStateOf(PHASE_INVITATION) }
+    var schedulesByMeeting by remember { mutableStateOf<Map<String, List<ScheduleOption>>>(emptyMap()) }
+    var queueTypes by remember { mutableStateOf(QUEUE_TYPE_LABELS.keys.toSet()) }
+    var callSchedule by remember { mutableStateOf<String?>(null) }
+    var callFollowUp by remember { mutableStateOf("") }
+    var nextAvailableLabel by remember { mutableStateOf("") }
+    var inboundSchedule by remember { mutableStateOf<String?>(null) }
     var managedMeetings by remember { mutableStateOf<List<ManagedMeeting>>(emptyList()) }
     var destination by remember { mutableStateOf(DialDestination.Home) }
     var expandedPersonId by remember { mutableStateOf<String?>(null) }
@@ -178,11 +185,11 @@ private fun DialScreen() {
 
     fun clearMeetingForm() {
         editingMeetingId = null
-        meetingNumber = ""
         meetingName = ""
-        meetingDay = ""
-        meetingTime = ""
         meetingLocation = ""
+        meetingSchedules = listOf(ScheduleDraft())
+        meetingQueue = QueueSettings()
+        meetingPhase = PHASE_INVITATION
     }
 
     suspend fun loadMeetings(sessionApi: DjangoSessionApi) {
@@ -191,22 +198,21 @@ private fun DialScreen() {
         meetingTimezone = payload.getString("timezone")
         val managed = payload.optJSONArray("managed_meetings")
         managedMeetings = if (managed == null) emptyList() else (0 until managed.length()).map { index ->
-            val meeting = managed.getJSONObject(index)
-            ManagedMeeting(
-                id = meeting.getString("id"), number = meeting.getInt("number"),
-                name = meeting.getString("name"), startsAtLocal = meeting.getString("starts_at_local"),
-                location = meeting.optString("location"), active = meeting.getBoolean("active"),
-            )
+            parseManagedMeeting(managed.getJSONObject(index))
         }
         val array = payload.getJSONArray("meetings")
-        meetingList = (0 until array.length()).map { index ->
-            val meeting = array.getJSONObject(index)
-            meeting.getString("id") to "${meeting.getInt("number")} · ${meeting.getString("name")}"
+        val meetings = (0 until array.length()).map { array.getJSONObject(it) }
+        meetingList = meetings.map { meeting ->
+            val phase = PHASE_LABELS[meeting.optString("call_phase")]?.substringBefore(" ·")
+            meeting.getString("id") to listOfNotNull(meeting.getString("name"), phase).joinToString(" · ")
         }
         val session = withContext(Dispatchers.IO) { sessionApi.get("/api/v1/session/") }
         signedInUsername = session.getString("username")
         val selected = session.optJSONObject("meeting")
         activeMeetingId = selected?.getString("id")
+        val activeMeeting = meetings.firstOrNull { it.getString("id") == activeMeetingId }
+        activePhase = activeMeeting?.optString("call_phase")?.ifBlank { null } ?: PHASE_INVITATION
+        schedulesByMeeting = meetings.associate { it.getString("id") to scheduleOptions(it) }
         sessionApi.meetingId = activeMeetingId
         activeMeetingName = selected?.getString("name") ?: "Sin seleccionar"
         canManage = session.getBoolean("can_manage")
@@ -308,14 +314,24 @@ private fun DialScreen() {
 
     fun requestNextCall() {
         runRequest {
+            val body = JSONObject()
+            if (activePhase == PHASE_CONFIRMATION) body.put("types", org.json.JSONArray(queueTypes.toList()))
             val payload = withContext(Dispatchers.IO) {
-                api!!.post("/api/v1/calls/next/", JSONObject())
+                api!!.post("/api/v1/calls/next/", body)
             }
+            payload.optString("call_phase").takeIf { it.isNotBlank() }?.let { activePhase = it }
+            nextAvailableLabel = payload.optString("next_available_label").takeIf { it.isNotBlank() && it != "null" }.orEmpty()
             val raw = payload.optJSONObject("task")
             callQueueEmpty = raw == null
             callTask = raw?.let {
                 val person = it.getJSONObject("participant")
+                val taskMeeting = it.getJSONObject("meeting")
                 CallTaskInfo(
+                    purpose = it.optString("purpose", PHASE_INVITATION).ifBlank { PHASE_INVITATION },
+                    queueType = it.optString("queue_type"),
+                    scheduleId = person.optString("schedule_id").takeIf { id -> id.isNotBlank() && id != "null" },
+                    scheduleLabel = person.optString("schedule_label").takeIf { label -> label != "null" }.orEmpty(),
+                    schedules = parseScheduleOptions(taskMeeting.optJSONArray("schedules")),
                     id = it.getString("id"),
                     name = person.getString("name"),
                     phone = person.optString("phone"),
@@ -330,9 +346,14 @@ private fun DialScreen() {
                     }.orEmpty(),
                 )
             }
-            notice = if (callTask == null) "No hay llamadas disponibles en este momento."
-            else "Llamada asignada. Registra el resultado al terminar."
+            notice = when {
+                callTask != null -> "Llamada asignada. Registra el resultado al terminar."
+                nextAvailableLabel.isNotBlank() -> "No hay llamadas ahora. La próxima estará disponible a las $nextAvailableLabel."
+                else -> "No hay llamadas disponibles en este momento."
+            }
             callNotes = ""
+            callSchedule = callTask?.scheduleId
+            callFollowUp = ""
         }
     }
 
@@ -377,6 +398,9 @@ private fun DialScreen() {
                     doNotContact = item.optBoolean("do_not_contact"),
                     authorized = item.optBoolean("contact_authorized"),
                     invitationStatus = item.optString("invitation_status"),
+                    scheduleId = item.optString("schedule_id").takeIf { it.isNotBlank() && it != "null" },
+                    scheduleLabel = item.optString("schedule_label").takeIf { it != "null" }.orEmpty(),
+                    confirmation = item.optString("attendance_confirmation").takeIf { it != "null" }.orEmpty(),
                 )
             }
             results = if (page == 1) found else (results + found).distinctBy { it.id }
@@ -615,7 +639,7 @@ private fun DialScreen() {
                                 DocSection("Gestionar reuniones") {
                                     val editing = managedMeetings.firstOrNull { it.id == editingMeetingId }
                                     Text(
-                                        if (editing == null) "Crear reunión nueva" else "Editar reunión ${editing.number}",
+                                        if (editing == null) "Crear reunión nueva" else "Editar reunión «${editing.name}»",
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
@@ -625,41 +649,39 @@ private fun DialScreen() {
                                     OutlinedButton(enabled = !busy, onClick = { clearMeetingForm() }) { ActionLabel("Nueva reunión", Icons.Default.Add) }
                                     Text("Zona horaria del servidor: $meetingTimezone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     FormTextField(
-                                        value = meetingNumber, onValueChange = { meetingNumber = digitsOnly(it, 2) },
-                                        label = "Número (1–99, único por día)", leadingIcon = Icons.Default.Info,
-                                        supportingText = "Puede repetirse en reuniones de otra fecha.",
-                                        keyboardType = KeyboardType.Number, modifier = Modifier.fillMaxWidth(),
-                                    )
-                                    FormTextField(
                                         value = meetingName, onValueChange = { meetingName = it },
                                         label = "Nombre de la reunión", leadingIcon = Icons.Default.Edit,
                                         capitalization = KeyboardCapitalization.Sentences,
-                                        imeAction = ImeAction.Done, modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
-                                    MeetingDateTimePickers(
-                                        day = meetingDay, time = meetingTime, enabled = !busy,
-                                        onDayChange = { meetingDay = it }, onTimeChange = { meetingTime = it },
-                                    )
-                                    AttendanceCodePreview(number = meetingNumber, day = meetingDay)
                                     FormTextField(
                                         value = meetingLocation, onValueChange = { meetingLocation = it },
                                         label = "Lugar (opcional)", leadingIcon = Icons.Default.Place,
                                         capitalization = KeyboardCapitalization.Sentences,
                                         imeAction = ImeAction.Done, modifier = Modifier.fillMaxWidth(),
                                     )
+                                    ScheduleListEditor(meetingSchedules, enabled = !busy, onChange = { meetingSchedules = it })
+                                    if (editing != null) CallPhaseSelector(meetingPhase, enabled = !busy, onChange = { meetingPhase = it })
+                                    QueueSettingsEditor(meetingQueue, enabled = !busy, onChange = { meetingQueue = it })
+                                    val problem = scheduleProblem(meetingSchedules)
+                                    if (problem != null) Text(problem, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    if (!meetingQueue.valid) Text("Revisa las reglas de la cola: hay valores fuera de rango.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                                     Button(
-                                        enabled = !busy && (meetingNumber.toIntOrNull() ?: 0) in 1..99 &&
-                                            meetingName.isNotBlank() && meetingDay.isNotBlank() && meetingTime.isNotBlank(),
+                                        enabled = !busy && meetingName.isNotBlank() && problem == null && meetingQueue.valid,
                                         onClick = {
                                             runRequest {
-                                                val body = JSONObject()
-                                                    .put("number", meetingNumber)
-                                                    .put("name", meetingName)
-                                                    .put("starts_at", "$meetingDay $meetingTime")
-                                                    .put("location", meetingLocation)
+                                                val body = meetingRequestBody(
+                                                    meetingName, meetingLocation, meetingSchedules, meetingQueue,
+                                                    callPhase = if (editing == null) null else meetingPhase,
+                                                )
                                                 val path = if (editing == null) "/api/v1/meetings/" else "/api/v1/meetings/${editing.id}/"
                                                 withContext(Dispatchers.IO) { api!!.post(path, body) }
-                                                notice = if (editing == null) "Reunión creada sin participantes." else "Reunión actualizada."
+                                                notice = when {
+                                                    editing == null -> "Reunión creada sin participantes."
+                                                    editing.callPhase != meetingPhase && meetingPhase == PHASE_CONFIRMATION ->
+                                                        "Reunión en fase 2: se generaron las llamadas de confirmación."
+                                                    else -> "Reunión actualizada."
+                                                }
                                                 clearMeetingForm()
                                                 loadMeetings(api!!)
                                             }
@@ -679,21 +701,29 @@ private fun DialScreen() {
                                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                     Icon(Icons.Default.DateRange, null, tint = MaterialTheme.colorScheme.primary)
-                                                    Text("${meeting.number} · ${meeting.name}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                                                    Text(meeting.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                                                     Icon(if (meeting.active) Icons.Default.CheckCircle else Icons.Default.Close, if (meeting.active) "Activa" else "Inactiva", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 }
-                                                Text(meeting.startsAtLocal, style = MaterialTheme.typography.bodyMedium)
+                                                Text(PHASE_LABELS[meeting.callPhase] ?: meeting.callPhase, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                                                meeting.schedules.forEach { schedule ->
+                                                    Text(
+                                                        "• ${schedule.day} ${schedule.time}" +
+                                                            (schedule.location.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +
+                                                            " · ${schedule.participantCount} asignado(s)",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                    )
+                                                }
                                                 Text(meeting.location.ifBlank { "Sin lugar" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 Text(if (meeting.active) "Activa" else "Inactiva", style = MaterialTheme.typography.labelLarge)
                                                 HorizontalDivider()
                                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                                     TextButton(enabled = !busy, onClick = {
                                                         editingMeetingId = meeting.id
-                                                        meetingNumber = meeting.number.toString()
                                                         meetingName = meeting.name
-                                                        meetingDay = meeting.startsAtLocal.substringBefore(" ")
-                                                        meetingTime = meeting.startsAtLocal.substringAfter(" ", "")
                                                         meetingLocation = meeting.location
+                                                        meetingSchedules = meeting.schedules.ifEmpty { listOf(ScheduleDraft()) }
+                                                        meetingQueue = meeting.queue
+                                                        meetingPhase = meeting.callPhase
                                                     }) { ActionLabel("Editar", Icons.Default.Edit) }
                                                     TextButton(enabled = !busy, onClick = {
                                                         runRequest {
@@ -739,13 +769,27 @@ private fun DialScreen() {
                             DialDestination.Calls -> if (canOperate) item {
                                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                                     Text("Una conversación a la vez", style = MaterialTheme.typography.headlineLarge)
-                                    Button(enabled = !busy && callTask == null, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), onClick = ::requestNextCall) {
+                                    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) {
+                                        Text(PHASE_LABELS[activePhase] ?: activePhase, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                    }
+                                    if (activePhase == PHASE_CONFIRMATION && callTask == null) {
+                                        Text(
+                                            "Confirma la asistencia de quienes aceptaron (puedes cambiar su horario) o llama a quienes nunca respondieron.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        QueueTypeSelector(queueTypes, enabled = !busy, onChange = { queueTypes = it })
+                                    }
+                                    Button(enabled = !busy && callTask == null && (activePhase != PHASE_CONFIRMATION || queueTypes.isNotEmpty()), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), onClick = ::requestNextCall) {
                                         ActionLabel(if (busy) "Consultando…" else "Solicitar siguiente llamada", Icons.Default.Call)
                                     }
                                     if (callTask == null) EmptyState(
                                         Icons.Default.Call,
                                         if (callQueueEmpty) "No hay llamadas disponibles" else "Listo para llamar",
-                                        if (callQueueEmpty) "La cola está vacía por ahora. Puedes volver a consultar." else "Solicita una llamada y registra el resultado al terminar.",
+                                        when {
+                                            !callQueueEmpty -> "Solicita una llamada y registra el resultado al terminar."
+                                            nextAvailableLabel.isNotBlank() -> "La próxima estará disponible a las $nextAvailableLabel."
+                                            else -> "La cola está vacía por ahora. Puedes volver a consultar."
+                                        },
                                         actionLabel = if (callQueueEmpty) "Volver a consultar" else null,
                                         actionIcon = Icons.Default.Refresh,
                                         onAction = ::requestNextCall,
@@ -759,6 +803,16 @@ private fun DialScreen() {
                                                 Text(task.phone.ifBlank { "Sin teléfono" }, style = MaterialTheme.typography.titleLarge)
                                                 Text("Reunión: ${task.meeting}")
                                                 Text("Origen: ${task.origin}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                val confirming = task.purpose == PHASE_CONFIRMATION
+                                                Text(
+                                                    when {
+                                                        confirming -> "Confirmar asistencia" + (task.scheduleLabel.takeIf { it.isNotBlank() }?.let { " · Horario actual: $it" } ?: "")
+                                                        task.queueType == "never_answered" -> "Invitación · nunca respondió"
+                                                        task.queueType == "follow_up" -> "Invitación · seguimiento"
+                                                        else -> "Invitación"
+                                                    },
+                                                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                                                )
                                                 if (task.phone.isNotBlank()) Button(onClick = {
                                                     context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(task.phone)}")))
                                                 }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { ActionLabel("Llamar", Icons.Default.Call) }
@@ -768,18 +822,42 @@ private fun DialScreen() {
                                                     task.history.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                                                 }
                                                 OutlinedTextField(value = callNotes, onValueChange = { callNotes = it }, label = { Text("Notas de la llamada") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, modifier = Modifier.fillMaxWidth())
+                                                SchedulePicker(
+                                                    options = task.schedules, selected = callSchedule, enabled = !busy,
+                                                    title = if (confirming) "Horario (cámbialo si la persona lo pide)" else "Horario al que asistirá (obligatorio para «Aceptó»)",
+                                                    onSelect = { callSchedule = it },
+                                                )
+                                                FollowUpPicker(callFollowUp, enabled = !busy, onChange = { callFollowUp = it })
                                                 Text("Resultado de la llamada", fontWeight = FontWeight.Bold)
                                                 OutcomeGrid(
-                                                    options = listOf("accepted" to "Aceptó", "declined" to "Rechazó", "contacted" to "Contactado", "no_answer" to "No contesta", "follow_up" to "Seguimiento", "do_not_contact" to "No contactar", "other" to "Otro"),
+                                                    options = if (confirming) CONFIRMATION_OUTCOMES else INVITATION_OUTCOMES,
                                                     enabled = !busy,
                                                 ) { outcome ->
+                                                    val needsSchedule = outcome == "accepted" || (outcome == "confirmed" && task.scheduleId == null)
+                                                    if (needsSchedule && callSchedule == null) {
+                                                        notice = "Elige el horario al que asistirá antes de registrar «${(INVITATION_OUTCOMES + CONFIRMATION_OUTCOMES).toMap()[outcome]}»."
+                                                        scope.launch { snackbarHostState.showNotice(notice, AdmonitionKind.Warning) }
+                                                        return@OutcomeGrid
+                                                    }
                                                     runRequest {
-                                                        val response = withContext(Dispatchers.IO) {
-                                                            api!!.post("/api/v1/calls/${task.id}/result/", JSONObject().put("outcome", outcome).put("notes", callNotes))
+                                                        val body = JSONObject().put("outcome", outcome).put("notes", callNotes)
+                                                        if (outcome == "accepted" || (outcome == "confirmed" && callSchedule != null && callSchedule != task.scheduleId)) {
+                                                            body.put("schedule_id", callSchedule)
                                                         }
-                                                        notice = response.optString("code").takeIf { it.isNotBlank() }?.let { "Aceptación registrada. Código: $it" } ?: "Resultado de llamada guardado."
+                                                        if (outcome == "follow_up" && callFollowUp.isNotBlank()) body.put("follow_up_at", callFollowUp)
+                                                        val response = withContext(Dispatchers.IO) {
+                                                            api!!.post("/api/v1/calls/${task.id}/result/", body)
+                                                        }
+                                                        notice = response.optString("code").takeIf { it.isNotBlank() && outcome == "accepted" }?.let { "Aceptación registrada. Código: $it" }
+                                                            ?: when (outcome) {
+                                                                "confirmed" -> "Asistencia confirmada."
+                                                                "will_not_attend" -> "Registrado: no asistirá."
+                                                                else -> "Resultado de llamada guardado."
+                                                            }
                                                         callTask = null
                                                         callQueueEmpty = false
+                                                        callSchedule = null
+                                                        callFollowUp = ""
                                                     }
                                                 }
                                             }
@@ -811,14 +889,20 @@ private fun DialScreen() {
                                 if (results.isEmpty()) item { EmptyState(Icons.Default.Search, "Sin resultados", "Busca por nombre o teléfono, o deja el campo vacío para ver la lista.") }
                                 items(results, key = { it.id }) { person ->
                                     val expanded = expandedPersonId == person.id
-                                    OutlinedCard(onClick = { expandedPersonId = if (expanded) null else person.id }, modifier = Modifier.fillMaxWidth()) {
+                                    OutlinedCard(onClick = { expandedPersonId = if (expanded) null else person.id; inboundSchedule = null }, modifier = Modifier.fillMaxWidth()) {
                                         ListItem(
                                             headlineContent = { Text(person.name, fontWeight = FontWeight.Bold) },
                                             supportingContent = {
                                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                     Text(person.phone.ifBlank { "Sin teléfono" })
                                                     Surface(shape = RoundedCornerShape(6.dp), color = if (person.doNotContact) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant) {
-                                                        Text(if (person.doNotContact) "NO CONTACTAR" else person.invitationStatus.ifBlank { "Sin invitación" }, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                                                        Text(if (person.doNotContact) "NO CONTACTAR" else INVITATION_STATUS_LABELS[person.invitationStatus] ?: person.invitationStatus.ifBlank { "Sin invitación" }, Modifier.padding(horizontal = 8.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall)
+                                                    }
+                                                    if (person.invitationStatus == "accepted") {
+                                                        Text(
+                                                            "Horario: ${person.scheduleLabel.ifBlank { "sin asignar" }} · ${CONFIRMATION_LABELS[person.confirmation] ?: "Sin confirmar"}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                        )
                                                     }
                                                     Text(if (expanded) "Ocultar opciones" else "Ver opciones", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                                                 }
@@ -838,13 +922,62 @@ private fun DialScreen() {
                                         if (expanded) Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                             HorizontalDivider()
                                             if (person.originId != null) {
-                                                Text("Registrar contacto entrante", fontWeight = FontWeight.Bold)
-                                                OutcomeGrid(listOf("contacted" to "Contactado", "accepted" to "Aceptó", "declined" to "Rechazó", "follow_up" to "Seguimiento", "do_not_contact" to "No contactar", "other" to "Otro"), !busy) { outcome ->
-                                                    runRequest {
-                                                        val response = withContext(Dispatchers.IO) {
-                                                            api!!.post("/api/v1/calls/inbound/", JSONObject().put("participant_id", person.id).put("outcome", outcome))
+                                                val options = schedulesByMeeting[person.originId].orEmpty()
+                                                val accepted = person.invitationStatus == "accepted"
+                                                val chosen = inboundSchedule?.takeIf { id -> options.any { it.id == id } } ?: person.scheduleId
+                                                SchedulePicker(
+                                                    options = options, selected = chosen, enabled = !busy,
+                                                    title = if (accepted) "Horario" else "Horario (obligatorio para «Aceptó»)",
+                                                    onSelect = { inboundSchedule = it },
+                                                )
+                                                if (accepted && chosen != null && chosen != person.scheduleId) {
+                                                    Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                                                        runRequest {
+                                                            val response = withContext(Dispatchers.IO) {
+                                                                api!!.post("/api/v1/participants/${person.id}/schedule/", JSONObject().put("schedule_id", chosen))
+                                                            }
+                                                            val label = response.optString("schedule_label")
+                                                            results = results.map { if (it.id == person.id) it.copy(scheduleId = chosen, scheduleLabel = label) else it }
+                                                            inboundSchedule = null
+                                                            notice = "Horario cambiado: $label"
                                                         }
-                                                        notice = response.optString("code").takeIf(String::isNotBlank)?.let { "Aceptación registrada. Código: $it" } ?: "Contacto entrante registrado."
+                                                    }) { ActionLabel("Cambiar horario", Icons.Default.DateRange) }
+                                                }
+                                                Text("Registrar contacto entrante", fontWeight = FontWeight.Bold)
+                                                val inboundOptions = buildList {
+                                                    add("contacted" to "Contactado")
+                                                    if (accepted) { add("confirmed" to "Confirmó"); add("will_not_attend" to "No asistirá") }
+                                                    else { add("accepted" to "Aceptó"); add("declined" to "Rechazó") }
+                                                    add("follow_up" to "Seguimiento"); add("do_not_contact" to "No contactar"); add("other" to "Otro")
+                                                }
+                                                OutcomeGrid(inboundOptions, !busy) { outcome ->
+                                                    if ((outcome == "accepted" || (outcome == "confirmed" && person.scheduleId == null)) && chosen == null) {
+                                                        notice = "Elige el horario antes de registrar el resultado."
+                                                        scope.launch { snackbarHostState.showNotice(notice, AdmonitionKind.Warning) }
+                                                        return@OutcomeGrid
+                                                    }
+                                                    runRequest {
+                                                        val body = JSONObject().put("participant_id", person.id).put("outcome", outcome)
+                                                        if (outcome == "accepted" || (outcome == "confirmed" && chosen != null && chosen != person.scheduleId)) {
+                                                            body.put("schedule_id", chosen)
+                                                        }
+                                                        val response = withContext(Dispatchers.IO) {
+                                                            api!!.post("/api/v1/calls/inbound/", body)
+                                                        }
+                                                        inboundSchedule = null
+                                                        notice = response.optString("code").takeIf { it.isNotBlank() && outcome == "accepted" }?.let { "Aceptación registrada. Código: $it" }
+                                                            ?: "Contacto entrante registrado."
+                                                        val label = options.firstOrNull { it.id == chosen }?.label.orEmpty()
+                                                        results = results.map { item ->
+                                                            if (item.id != person.id) item else when (outcome) {
+                                                                "accepted" -> item.copy(invitationStatus = "accepted", scheduleId = chosen, scheduleLabel = label, confirmation = "pending")
+                                                                "declined" -> item.copy(invitationStatus = "declined")
+                                                                "confirmed" -> item.copy(confirmation = "confirmed", scheduleId = chosen, scheduleLabel = label)
+                                                                "will_not_attend" -> item.copy(confirmation = "will_not_attend")
+                                                                "do_not_contact" -> item.copy(doNotContact = true)
+                                                                else -> item
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }

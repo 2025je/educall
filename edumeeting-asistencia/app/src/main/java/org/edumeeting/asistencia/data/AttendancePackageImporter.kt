@@ -14,6 +14,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+/** Código actual (INICIALES-SSSS) y los anteriores a los horarios (INICIALES-[DDMMAA-]NN-SSS). */
+internal val ATTENDANCE_CODE = Regex("^[A-Z]{2}-([0-9]{4,}|([0-9]{6}-)?[0-9]{2}-[0-9]{3,})$")
+
 object AttendancePackageImporter {
     private const val MAX_PACKAGE_BYTES = 25 * 1024 * 1024
     private val json = Json { ignoreUnknownKeys = false }
@@ -85,11 +88,16 @@ object AttendancePackageImporter {
         require(AttendancePin.isValidHash(pinHash)) {
             "El paquete no incluye el PIN de la reunión. Define el PIN en el servidor y exporta un paquete nuevo."
         }
+        val schedules = meetingData["schedules"]?.jsonArray.orEmpty().map { element ->
+            val schedule = element.jsonObject
+            UUID.fromString(schedule.getValue("id").jsonPrimitive.content)
+            schedule.getValue("label").jsonPrimitive.content
+        }
+        require(schedules.isNotEmpty()) { "El paquete no incluye los horarios de la reunión." }
         val meeting = LocalMeeting(
             id = meetingId,
-            number = meetingData.getValue("number").jsonPrimitive.content.toInt(),
             name = meetingData.getValue("name").jsonPrimitive.content,
-            startsAt = meetingData.getValue("starts_at").jsonPrimitive.content,
+            schedules = schedules.joinToString("\n"),
             location = meetingData.getValue("location").jsonPrimitive.content,
             allowCrossMeetingAttendance = meetingData.getValue("allow_cross_meeting_attendance").jsonPrimitive.content.toBooleanStrict(),
             invitedCount = meetingData.getValue("invited_count").jsonPrimitive.content.toInt(),
@@ -107,7 +115,7 @@ object AttendancePackageImporter {
                 item["origin_meeting_id"]?.takeUnless { it.toString() == "null" }?.jsonPrimitive?.content?.let {
                     UUID.fromString(it)
                 }
-                require(Regex("^[A-Z]{2}-([0-9]{6}-)?[0-9]{2}-[0-9]{3,}$").matches(code)) {
+                require(ATTENDANCE_CODE.matches(code)) {
                     "El paquete contiene un código de asistencia inválido."
                 }
                 LocalParticipant(
@@ -118,6 +126,8 @@ object AttendancePackageImporter {
                     originMeetingName = item["origin_meeting_name"]?.takeUnless { it.toString() == "null" }?.jsonPrimitive?.content,
                     meetingId = meetingId,
                     code = code,
+                    scheduleLabel = item["schedule_label"]?.takeUnless { it.toString() == "null" }?.jsonPrimitive?.content.orEmpty(),
+                    attendanceConfirmation = item["attendance_confirmation"]?.takeUnless { it.toString() == "null" }?.jsonPrimitive?.content.orEmpty(),
                 )
             }
         require(participants.map { it.id }.distinct().size == participants.size) {

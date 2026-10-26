@@ -5,13 +5,14 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Meeting
+from attendance.testing import create_meeting
 
 
 class ClassBasedViewAccessTests(TestCase):
     def setUp(self):
         self.admin = get_user_model().objects.create_user("admin")
         self.admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
-        self.meeting = Meeting.objects.create(number=9, name="CBV", starts_at=timezone.now(), administrator=self.admin)
+        self.meeting = create_meeting(number=9, name="CBV", starts_at=timezone.now(), administrator=self.admin)
 
     def test_anonymous_users_are_redirected_to_login(self):
         for url in (
@@ -62,7 +63,7 @@ class MaterialLayoutTests(TestCase):
         self.assertNotContains(response, "md-sidebar--primary")
 
     def test_meeting_management_has_navigation_and_toc(self):
-        Meeting.objects.create(number=4, name="Taller", starts_at=timezone.now(), administrator=self.admin, active=False)
+        create_meeting(number=4, name="Taller", starts_at=timezone.now(), administrator=self.admin, active=False)
         self.client.force_login(self.admin)
         response = self.client.get(reverse("meeting-management"))
         self.assertContains(response, 'md-nav__link md-nav__link--active" href="/meetings/"')
@@ -173,16 +174,16 @@ class SuperuserScopeTests(TestCase):
         self.root.groups.add(*Group.objects.filter(name__in=("ADMINISTRADOR", "REGISTRAR", "OPERADOR")))
         self.admin = get_user_model().objects.create_user("scope-admin")
         self.admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
-        self.meeting = Meeting.objects.create(number=4, name="Ajena", starts_at=timezone.now(), administrator=self.admin)
+        self.meeting = create_meeting(number=4, name="Ajena", starts_at=timezone.now(), administrator=self.admin)
         self.meeting.registrars.add(self.root)
         self.meeting.operators.add(self.root)
-        self.inactive = Meeting.objects.create(number=5, name="Pasada", starts_at=timezone.now(), administrator=self.admin, active=False)
+        self.inactive = create_meeting(number=5, name="Pasada", starts_at=timezone.now(), administrator=self.admin, active=False)
         self.client.force_login(self.root)
 
     def test_web_meeting_management_is_denied(self):
         self.assertRedirects(self.client.get(reverse("operator")), reverse("statistics"))
         self.assertEqual(self.client.get(reverse("meeting-management")).status_code, 403)
-        self.assertEqual(self.client.post(reverse("meeting-management"), {"number": 7, "name": "Nueva"}).status_code, 403)
+        self.assertEqual(self.client.post(reverse("meeting-management"), {"name": "Nueva"}).status_code, 403)
         self.assertEqual(self.client.get(reverse("meeting-edit", args=[self.meeting.pk])).status_code, 403)
         self.assertEqual(self.client.post(reverse("meeting-toggle", args=[self.meeting.pk])).status_code, 403)
         self.assertEqual(self.client.post(reverse("select-meeting"), {"meeting_id": str(self.meeting.pk)}).status_code, 403)
@@ -194,7 +195,7 @@ class SuperuserScopeTests(TestCase):
         self.assertEqual(self.client.post(reverse("offline-pin", args=[self.meeting.pk]), {"pin": "123456"}).status_code, 403)
         self.meeting.refresh_from_db()
         self.assertTrue(self.meeting.active)
-        self.assertFalse(Meeting.objects.filter(number=7).exists())
+        self.assertFalse(Meeting.objects.filter(name="Nueva").exists())
 
     def test_api_meeting_operations_are_denied(self):
         headers = {"HTTP_X_EDUMEETING_MEETING": str(self.meeting.pk)}

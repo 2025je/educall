@@ -12,7 +12,7 @@ def create_default_roles(sender, **kwargs):
     User = get_user_model()
     role_permissions = {
         "ADMINISTRADOR": Permission.objects.filter(
-            content_type__app_label="attendance", codename__in=("add_meeting", "view_meeting")
+            content_type__app_label="attendance", codename__in=("add_meeting", "view_meeting", "view_realtimeevent")
         ),
         "REGISTRAR": Permission.objects.filter(
             codename__in=(

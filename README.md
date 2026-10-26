@@ -101,7 +101,7 @@ Las integraciones conservan las sesiones web con CSRF y los contratos usados por
 
 | Componente | Uso en EduMeeting |
 |---|---|
-| Django Channels + Redis | WebSocket por reunión en `/ws/attendance/<meeting_id>/`, autenticado con la sesión web y validación del origen. Solo operadores asignados (el superusuario no opera reuniones); se revalidan permisos en cada evento y ping. |
+| Django Channels + Redis | WebSocket por reunión en `/ws/attendance/<meeting_id>/`, autenticado con la sesión web y validación del origen. Solo operadores asignados y el administrador de la reunión (para seguir las llamadas en tiempo real); el superusuario no opera reuniones. Se revalidan permisos en cada evento y ping. |
 | Celery + Redis | Exportación de paquetes firmados de asistencia fuera de la petición web. Worker con dos procesos y scheduler para purgar contenidos caducados cada hora. |
 | drf-spectacular | OpenAPI en `/api/v1/schema/` y Swagger en `/api/v1/docs/`, exclusivos de superusuarios. Los recursos Swagger son locales, sin CDN. |
 | SimpleJWT | Autenticación Bearer adicional para clientes API; las apps móviles existentes siguen usando sesiones. |
@@ -124,6 +124,15 @@ Sin HTTPS local: `docker compose up --build -d --wait`. Redis no publica puertos
 ### Eventos de asistencia
 
 El operador web prefiere WebSocket y vuelve a SSE (`/api/v1/attendance/stream/`) si el canal se desconecta. Los eventos siguen persistidos en `RealtimeEvent` y solo se publican tras confirmar la transacción; una caída de Redis se registra y no revierte una operación ya confirmada. WebSocket es una notificación en vivo, no un registro con reproducción: después de una reconexión consulta la API para obtener el estado actual. El canal usa la sesión web, no tokens en la URL. Caddy admite WebSockets sin configuración adicional.
+
+### Llamadas en tiempo real para el administrador
+
+El administrador de la reunión activa ve en vivo qué hace cada operador asignado: **En llamada** (con la persona, el estado y el tiempo transcurrido), **Sin llamada asignada** o **Cuenta desactivada**, su último resultado, los intentos de las últimas 24 h y las aceptaciones, además de la fase y la cola (pendientes, reintentos programados, seguimiento, en curso, finalizadas, agotadas y, en fase 2, por confirmar).
+
+- **Web:** sección **Llamadas en tiempo real** en Inicio (tarjeta, menú lateral y «En esta página»). Usa `call_board.js`, sin recursos externos.
+- **App Llamadas:** tarjeta **Llamadas en tiempo real** en **Asignaciones**. Se detiene cuando la app pasa a segundo plano y se reanuda al volver.
+- Ambas consultan `GET /api/v1/meetings/call-board/` y se suscriben a `GET /api/v1/attendance/stream/?last_event_id=<cursor>` con el `last_event_id` devuelto por el tablero, para no repetir eventos antiguos. Cada evento `calls` (asignación, resultado o llamada entrante) provoca una nueva consulta. El stream se reabre cada ~25 s, lo que también refleja las asignaciones que vencen sin evento; la web, además, consulta cada 15 s como respaldo.
+- Una llamada cuenta como «en curso» mientras su asignación (10 min) no haya vencido. El grupo `ADMINISTRADOR` recibe el permiso `view_realtimeevent` al migrar, pero solo puede seguir las reuniones que administra. Registradores, otros administradores y el superusuario reciben 403.
 
 ### Exportación en segundo plano
 
@@ -237,7 +246,7 @@ En **EduMeeting Llamadas**, el superusuario inicia sesión en un modo propio: no
 
 La interfaz está inspirada en [Zensical](https://zensical.org/contributing/): barra superior translúcida (con desenfoque) con el logo, pestañas **Inicio** / **Reuniones**, la reunión activa como píldora, el usuario y **Salir**; menú lateral izquierdo con iconos (usuario, selector de reunión activa, Inicio con las secciones de tus roles, Gestionar reuniones y roles en la reunión), migas de pan (Inicio › Reunión), contenido central y columna derecha «En esta página» en pantallas anchas. En móviles el menú se abre con el botón ☰.
 
-- En Inicio, la reunión activa muestra tarjetas (icono, título, descripción y «→ enlace») que llevan a cada sección permitida por tus roles: asignar usuarios, estadísticas, registrar persona, cola de llamadas, buscar participante y WhatsApp.
+- En Inicio, la reunión activa muestra tarjetas (icono, título, descripción y «→ enlace») que llevan a cada sección permitida por tus roles: asignar usuarios, llamadas en tiempo real, estadísticas, registrar persona, cola de llamadas, buscar participante y WhatsApp.
 - Solo el superusuario ve la pestaña **Usuarios** y el enlace lateral **Usuarios y grupos** (`/users/`). Desde la misma pantalla puede crear cuentas, editar nombre de usuario, nombre, apellidos y grupos, cambiar la contraseña y activar o desactivar las demás cuentas. No se solicita correo electrónico; los correos existentes se conservan sin modificarse. Al editar, dejar ambos campos de contraseña vacíos conserva la actual; las contraseñas nuevas requieren confirmación y cumplen los validadores de Django. Los operadores necesitan iniciales únicas de dos letras, cuyo perfil se crea o actualiza con el formulario. La lista incluye otros superusuarios y cuentas inactivas; no permite modificar la cuenta propia ni conceder o retirar privilegios de superusuario/personal (eso sigue en `/admin/`). No depende de la reunión activa y las demás cuentas no pueden acceder ni mediante URL directa. Los cambios de estado requieren POST con CSRF y desactivar impide el acceso sin borrar datos, asignaciones ni historial. Se registra quién realizó cada cambio, sin guardar contraseñas en el historial.
 - El botón de sol/luna cambia entre tema claro (blanco) y oscuro (#0B0C0F); la preferencia se guarda en el navegador (por defecto sigue la del sistema).
 - En **Usuarios y grupos**, el campo **Iniciales de operador** solo se habilita al marcar el grupo `OPERADOR` y se deshabilita al desmarcarlo. El servidor ignora las iniciales enviadas para otros grupos; si se retira el grupo de un operador existente, conserva su perfil e iniciales sin modificarlos.
@@ -277,6 +286,20 @@ El comando no modifica cuentas existentes ni restablece contraseñas. Si un nomb
 
 Sin Docker, con el entorno Django configurado y desde `edumeeting-server`, usa `python manage.py create_role_users` (opcionalmente `--staff`).
 
+#### Reiniciar con datos de prueba
+
+> [!CAUTION]
+> [reset_test_data](./edumeeting-server/attendance/management/commands/reset_test_data.py) **borra de forma irreversible** reuniones, horarios, participantes, llamadas, códigos, paquetes, mensajes, auditoría, sesiones, tokens y todos los usuarios que **no** son superusuarios. Haz un respaldo antes.
+
+Conserva a los superusuarios y los grupos, y crea `admin1` y `admin2` (`ADMINISTRADOR`), `registrador1` a `registrador3` (`REGISTRAR`) y `operador1` a `operador3` (`OPERADOR`, con iniciales `OA`, `OB` y `OC`). Las cuentas no quedan asignadas a ninguna reunión: crea las reuniones desde la web con un administrador.
+
+```powershell
+docker compose -f compose.yaml -f compose.local-https.yaml exec db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backups\antes-reset.sql
+docker compose -f compose.yaml -f compose.local-https.yaml exec web python manage.py reset_test_data
+```
+
+Pide escribir `BORRAR` para confirmar (`--yes` omite la pregunta). Sin `--password` genera una contraseña aleatoria por cuenta y la muestra al final; con `--password "..."` usa la misma para todas (debe cumplir las reglas de contraseñas). Si falla algo, no se borra nada.
+
 ### Grupos de usuarios: funciones y limitaciones
 
 Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendance/signals.py). Además del grupo, el servidor valida la pertenencia a la reunión mediante [attendance/access.py](./edumeeting-server/attendance/access.py). Los permisos globales o individuales no sustituyen esa asignación.
@@ -286,6 +309,7 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 | Crear, editar y activar/desactivar reuniones | Sí, en una vista independiente de la reunión activa; queda como único administrador | No | No |
 | Asignar registradores y operadores existentes | Solo en sus reuniones | No | No |
 | Ver estadísticas de reuniones y actividad de sus usuarios | Solo en sus reuniones | No | No |
+| Ver en tiempo real el estado de las llamadas de los operadores | Solo en sus reuniones (web y app) | No | No |
 | Registrar datos de personas y añadirlas automáticamente a la cola | No | Solo en reuniones asignadas | No |
 | Solicitar siguiente llamada, buscar y listar teléfonos | No | No | Solo en reuniones asignadas |
 | Registrar resultados y contactos entrantes | No | No | Solo en la reunión activa |
@@ -294,7 +318,7 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 | Exportar/importar asistencia offline o resolver conflictos | Solo en sus reuniones | No | No |
 | Ver estadísticas de todas las reuniones (solo lectura) | No | No | No; reservado al superusuario |
 
-**`ADMINISTRADOR`: responsable de sus reuniones.** Puede crear varias reuniones, cada una con un único administrador. Asigna y retira registradores/operadores existentes y consulta estadísticas de cada reunión: personas registradas, llamadas pendientes y finalizadas, intentos y aceptaciones, con desglose por usuario. No crea cuentas ni gestiona permisos globales, no registra personas y no atiende llamadas salvo que también tenga esos roles y esté asignado como miembro.
+**`ADMINISTRADOR`: responsable de sus reuniones.** Puede crear varias reuniones, cada una con un único administrador. Asigna y retira registradores/operadores existentes y consulta estadísticas de cada reunión: personas registradas, llamadas pendientes y finalizadas, intentos y aceptaciones, con desglose por usuario. También sigue en tiempo real qué operador está en llamada, con quién y su último resultado, sin poder intervenir en las llamadas. No crea cuentas ni gestiona permisos globales, no registra personas y no atiende llamadas salvo que también tenga esos roles y esté asignado como miembro.
 
 **`REGISTRAR`: registro de personas a llamar.** Introduce nombre completo, teléfono y autorización de contacto en la reunión activa asignada. La persona y su tarea de llamada se guardan en una sola transacción y se atribuyen al registrador. Puede registrar en varias reuniones, pero no crear reuniones, asignar usuarios, consultar estadísticas ni acceder a la cola telefónica para operarla. No puede cambiar la reunión mediante campos enviados en el formulario.
 
@@ -321,24 +345,36 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 
 El administrador tiene dos tipos de vista:
 
-- **Gestionar reuniones** (independiente de la reunión activa): crea reuniones nuevas, edita número/nombre/fecha/lugar y activa o desactiva cualquiera de **sus** reuniones, incluidas las inactivas. Sirve también cuando todavía no existe ninguna reunión o ninguna está activa.
+- **Gestionar reuniones** (independiente de la reunión activa): crea reuniones nuevas, edita nombre/lugar/horarios/reglas de la cola/fase y activa o desactiva cualquiera de **sus** reuniones, incluidas las inactivas. Sirve también cuando todavía no existe ninguna reunión o ninguna está activa.
 - **Inicio con reunión activa seleccionada:** asignación de registradores/operadores y estadísticas de esa reunión.
 
 - En la web, entra como `ADMINISTRADOR` y abre **Gestionar reuniones** (`/meetings/`). Cada reunión de la lista tiene **Editar** y **Activar/Desactivar**.
-- En EduMeeting Llamadas, abre el menú ☰ → **Gestionar reuniones** (o el botón **Gestionar reuniones (crear, editar, desactivar)**); mientras esa vista está abierta se ocultan las tarjetas de la reunión activa. **Volver a la reunión activa** regresa. La fecha y la hora se eligen con calendario y reloj, en la zona horaria del servidor indicada en pantalla.
-- **Número de reunión (1–99), único por día:** no puede repetirse entre reuniones de la misma fecha, pero sí en fechas distintas (por ejemplo, la reunión `07` puede existir el 25/10 y el 26/10). La regla se valida en la base de datos y se aplica a reuniones de cualquier administrador.
-- **Vista previa del código:** mientras rellenas el formulario (web y Llamadas) se muestra el código final de ejemplo, p. ej. `JU-251026-07-001`, calculado con la fecha y el número escritos.
-- **Bloqueo tras emitir códigos:** cuando una reunión ya tiene códigos de asistencia, su número y su fecha no se pueden cambiar (los códigos ya entregados los contienen); sí se pueden cambiar la hora, el nombre y el lugar.
-- La reunión nueva queda activa, sin participantes ni tareas, con la cuenta creadora como único administrador. En la web queda seleccionada automáticamente como reunión activa.
+- En EduMeeting Llamadas, abre el menú ☰ → **Gestionar reuniones** (o el botón **Gestionar reuniones (crear, editar, desactivar)**); mientras esa vista está abierta se ocultan las tarjetas de la reunión activa. **Volver a la reunión activa** regresa. La fecha y la hora de cada horario se eligen con calendario y reloj, en la zona horaria del servidor indicada en pantalla.
+- **Horarios:** una reunión ya no tiene número ni una única fecha: tiene **uno o varios horarios** (fecha y hora, con lugar opcional; si se omite se usa el lugar de la reunión). No puede haber dos horarios con la misma fecha y hora. Un horario con personas asignadas no se puede eliminar (sí cambiar su hora o lugar). El **operador** decide a qué horario asistirá cada persona.
+- **Reglas de la cola** (por reunión): minutos para registrar el resultado (1–60), espera tras «No contesta» (1–1440 min), máximo de «No contesta» por fase (1–20; al alcanzarlo la llamada pasa a «Sin respuesta»), espera por defecto de un seguimiento (0–10080 min) y si los seguimientos vencidos tienen prioridad.
+- La reunión nueva queda activa, en **fase 1**, sin participantes ni tareas, con la cuenta creadora como único administrador. En la web queda seleccionada automáticamente como reunión activa.
 - **Desactivar** oculta la reunión a registradores y operadores (y la quita como reunión activa de quien la tenía seleccionada), pero conserva personas, llamadas, asignaciones e historial. **Activar** la vuelve a mostrar con sus asignaciones. Cada cambio se registra en la auditoría. Un administrador no puede ver ni modificar reuniones de otro administrador.
 - Selecciona la reunión y asigna registradores y operadores. En Llamadas pulsa **Consultar asignaciones y estadísticas**, marca las cuentas y guarda. Los registradores podrán agregar personas después.
 - Para actualizar una instalación existente, ejecuta `docker compose -f compose.yaml -f compose.local-https.yaml up --build -d web`: el arranque ejecuta las migraciones y redefine los permisos predeterminados. Sin HTTPS local, usa `docker compose up --build -d web`.
 - **Migración conservadora:** las reuniones anteriores conservan sus datos pero quedan sin administrador y no aparecen en las vistas operativas. Como `/admin/` es de solo lectura para reuniones, asignar un administrador a una reunión antigua requiere una corrección manual de mantenimiento (por ejemplo, `python manage.py shell`). No se deducen asignaciones del creador ni se borran participantes, llamadas o historiales.
 - Recompila e instala EduMeeting Llamadas con `docker compose -f compose.android.yaml run --rm llamadas`. Un APK anterior no contiene esta pantalla.
 
-- Las llamadas se asignan transaccionalmente, con vencimiento de diez minutos. Si no contestan, vuelven a estar disponibles después de quince minutos.
+#### Fases de llamadas
+
+El administrador elige la fase de la reunión al editarla (web o Llamadas). En ambas fases el registrador puede seguir añadiendo personas; cada una entra en la cola.
+
+- **Fase 1 · Invitación:** el operador llama y registra el resultado. Con **Aceptó** debe elegir el horario al que asistirá la persona; se emite su código de asistencia.
+- **Fase 2 · Confirmación:** al pasar a esta fase se crea una llamada de confirmación para cada persona que aceptó, se reabren las invitaciones agotadas por «No contesta» y se **reinician los contadores de «No contesta»**. Antes de pedir la siguiente llamada, el operador elige qué tipos de número quiere recibir:
+  - **Confirmar asistencia** (quienes aceptaron): resultados **Confirmó** (puede cambiar el horario), **No asistirá** (conserva el código), **No contesta** o **Seguimiento**.
+  - **Nunca respondieron**: invitaciones con algún «No contesta»; pueden aceptar (con horario, y quedan confirmadas).
+  - **Nuevos sin llamar**: personas registradas que aún no se han llamado.
+  - **Seguimientos**: llamadas con seguimiento agendado.
+- Si no hay llamadas disponibles, se indica a qué hora estará disponible la próxima.
+- En **Buscar participante** se ve el estado, el horario y la confirmación de cada persona; el operador puede **Cambiar horario** de quien aceptó o registrar un contacto entrante (aceptar con horario, confirmar o avisar que no asistirá).
+
+- Las llamadas se asignan transaccionalmente, con el vencimiento y las esperas definidos en las reglas de la cola de la reunión.
 - «No volver a contactar» excluye inmediatamente al participante de futuras asignaciones y mensajes.
-- Aceptar una invitación genera o reutiliza un código con el formato `JU-251026-07-001`: iniciales del operador (`JU`), fecha de la reunión en formato DDMMAA (`251026` = 25/10/2026), número de reunión de dos dígitos (`07`) y orden del invitado (`001`). La fecha hace que el código siga siendo único aunque el número de reunión se repita otro día. Los códigos anteriores sin fecha (`JU-03-001`) siguen siendo válidos en el servidor y en EduMeeting Asistencia.
+- Aceptar una invitación genera o reutiliza un código con el formato `JU-0001`: iniciales del operador (`JU`) y su correlativo de cuatro dígitos (`0001`, propio de cada operador). EduMeeting Asistencia acepta el código en cualquier horario de la reunión. Los códigos anteriores (`JU-251026-07-001`, `JU-03-001`) siguen siendo válidos en el servidor y en EduMeeting Asistencia.
 - Abrir WhatsApp no significa que se haya enviado el mensaje; el operador confirma el envío por separado.
 - Los conflictos entre asistencias de varios dispositivos se conservan para revisión; no se eliminan silenciosamente.
 
@@ -497,7 +533,7 @@ Set-Location .\edumeeting-llamadas
 
 El APK se genera en `edumeeting-llamadas\app\build\outputs\apk\debug\app-debug.apk`, tomando como referencia la raíz del repositorio.
 
-La app permite iniciar sesión con una cuenta del servidor, solicitar una llamada, abrir el marcador, registrar resultados, buscar contactos y preparar invitaciones de WhatsApp. No guarda la contraseña y el servidor sigue validando permisos y consentimiento de contacto.
+La app permite iniciar sesión con una cuenta del servidor, solicitar una llamada, abrir el marcador, registrar resultados, buscar contactos y preparar invitaciones de WhatsApp. El administrador de la reunión ve en **Asignaciones** el estado en tiempo real de las llamadas de sus operadores. No guarda la contraseña y el servidor sigue validando permisos y consentimiento de contacto.
 
 #### Interfaz de las apps Android
 
@@ -772,22 +808,24 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 
 | Método y ruta relativa | Función |
 |---|---|
-| `POST /calls/next/` | Solicitar la siguiente llamada. |
-| `POST /calls/{task_id}/result/` | Registrar resultado y notas. |
-| `POST /calls/inbound/` | Registrar contacto entrante. |
-| `GET /participants/search/?q=...` | Buscar participantes. |
+| `POST /calls/next/` | Solicitar la siguiente llamada. En fase 2 acepta `types` (`confirm`, `never_answered`, `new`, `follow_up`; vacío = todos). Devuelve `task` (con `purpose`, `queue_type`, horario del participante y horarios de la reunión), `call_phase` y, si no hay llamada, `next_available_at`/`next_available_label`. |
+| `POST /calls/{task_id}/result/` | Registrar `outcome`, `notes`, `schedule_id` (obligatorio con `accepted`; con `confirmed` cambia el horario) y `follow_up_at` (solo con `follow_up`). |
+| `POST /calls/inbound/` | Registrar contacto entrante (`participant_id`, `outcome`, `notes`, `schedule_id`). |
+| `POST /participants/{id}/schedule/` | Cambiar el horario de quien aceptó (`schedule_id`). |
+| `GET /participants/search/?q=...` | Buscar participantes (incluye `schedule_id`, `schedule_label` y `attendance_confirmation`). |
 | `GET /whatsapp/templates/` | Consultar plantillas activas. |
 | `POST /whatsapp/prepare/` | Preparar un mensaje autorizado. |
 | `POST /whatsapp/campaigns/prepare/` | Preparar entre 1 y 100 mensajes con plantillas por destinatario. |
 | `POST /whatsapp/{log_id}/status/` | Actualizar el estado manual de un mensaje. |
 | `POST /mobile/logout/` | Cerrar la sesión móvil. |
-| `GET /meetings/` | Listar reuniones activas accesibles (`meetings`) y, para administradores, todas sus reuniones incluidas las inactivas (`managed_meetings`, con `active` y `starts_at_local`). |
-| `POST /meetings/` | Crear una reunión vacía como ADMINISTRADOR (`number`, `name`, `starts_at`, `location` opcional); el creador queda como administrador único. |
-| `POST /meetings/{meeting_id}/` | Editar parcialmente una reunión propia (`number`, `name`, `starts_at`, `location`, `active` booleano). Las reuniones de otros administradores responden 404. |
+| `GET /meetings/` | Listar reuniones activas accesibles (`meetings`) y, para administradores, todas sus reuniones incluidas las inactivas (`managed_meetings`). Cada reunión incluye `call_phase`, `schedules` (`id`, `starts_at`, `location`, `starts_at_local`, `label`, `participant_count`) y las reglas de la cola. |
+| `POST /meetings/` | Crear una reunión vacía como ADMINISTRADOR (`name`, `location` opcional, `schedules` con al menos un `{starts_at, location}` y reglas de la cola opcionales); el creador queda como administrador único. |
+| `POST /meetings/{meeting_id}/` | Editar parcialmente una reunión propia (`name`, `location`, `schedules` —incluye `id` para conservar un horario; los omitidos sin personas se eliminan—, `call_phase`, reglas de la cola, `active` booleano). Las reuniones de otros administradores responden 404. |
 | `GET /session/` | Nombre de usuario, `is_superuser`, reunión activa y capacidades efectivas. |
 | `POST /meetings/select/` | Seleccionar una reunión accesible (`meeting_id`). |
 | `GET/POST /meetings/members/` | Consultar candidatos/asignaciones o guardar listas de IDs `registrars` y `operators`; solo el administrador de la reunión. |
 | `GET /meetings/statistics/` | Estadísticas de la reunión activa y actividad por usuario; solo su administrador. |
+| `GET /meetings/call-board/` | Estado en tiempo real de las llamadas de cada operador de la reunión activa (llamada en curso, último resultado, intentos) y de la cola, con `last_event_id` para el stream; solo su administrador. |
 | `GET /statistics/` | Estadísticas de solo lectura de todas las reuniones (`totals` y `meetings`); solo el superusuario. |
 | `GET/POST /users/` | Listar las demás cuentas con grupos, iniciales y estado (`users`) y los grupos disponibles (`groups`), o crear una cuenta (`username`, `first_name`, `last_name`, `groups` como lista de IDs, `initials`, `is_active`, `password1`, `password2`); solo el superusuario. Valida igual que la web. |
 | `POST /users/{id}/` | Editar otra cuenta con los mismos campos; las contraseñas vacías conservan la actual y `is_active` omitido conserva el estado. La cuenta propia responde 404. |
@@ -801,7 +839,7 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET /attendance/report/{meeting_id}/` | Consultar totales de la reunión. |
 | `GET /meetings/{meeting_id}/conflicts/` | Listar conflictos pendientes de una reunión propia (solo su administrador). |
 | `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión. |
-| `GET /attendance/stream/` | Recibir eventos SSE publicados después del commit. |
+| `GET /attendance/stream/` | Recibir eventos SSE de la reunión activa publicados después del commit (operadores asignados y su administrador). `?last_event_id=` o el encabezado `Last-Event-ID` indican desde qué evento continuar. |
 
 Sin Docker, ejecuta desde la carpeta del servidor:
 
