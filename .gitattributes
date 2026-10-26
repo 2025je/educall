@@ -17,3 +17,8 @@
 *.pdf binary
 *.zip binary
 *.sqlite3 binary
+
+# Scripts de Windows: CRLF. gradlew debe conservar LF para ejecutarse en Linux/macOS.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+gradlew text eol=lf

@@ -24,7 +24,8 @@ fi
 
 set -- "$@" :edumeeting-ui:testDebugUnitTest :app:testDebugUnitTest
 
-gradle --no-daemon --console=plain --max-workers=2 \
+# Wrapper del proyecto: misma versión de Gradle en Docker, CI y Android Studio.
+sh ./gradlew --no-daemon --console=plain --max-workers=2 \
     -Dorg.gradle.java.installations.auto-download=false \
     "$@" \
     :app:assembleDebug
