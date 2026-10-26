@@ -1,10 +1,23 @@
 name: edumeeting
 
+x-android-build: &android_build
+  image: edumeeting-android-builder
+  build: ./docker/android
+  environment: &android_environment
+    BUILD_TYPE: ${BUILD_TYPE:-debug}
+    VERSION_CODE: ${VERSION_CODE:-}
+    VERSION_NAME: ${VERSION_NAME:-}
+    ANDROID_KEYSTORE_BASE64: ${ANDROID_KEYSTORE_BASE64:-}
+    EDUMEETING_KEYSTORE_PASSWORD: ${EDUMEETING_KEYSTORE_PASSWORD:-}
+    EDUMEETING_KEY_ALIAS: ${EDUMEETING_KEY_ALIAS:-}
+    EDUMEETING_KEY_PASSWORD: ${EDUMEETING_KEY_PASSWORD:-}
+    ALLOW_DEBUG_SIGNED_RELEASE: ${ALLOW_DEBUG_SIGNED_RELEASE:-0}
+
 services:
   llamadas:
-    image: edumeeting-android-builder
-    build: ./docker/android
+    <<: *android_build
     environment:
+      <<: *android_environment
       APP_NAME: edumeeting-llamadas
     volumes:
       - ./edumeeting-llamadas:/source/edumeeting-llamadas:ro
@@ -14,9 +27,9 @@ services:
       - android_debug_keys:/root/.android
 
   asistencia:
-    image: edumeeting-android-builder
-    build: ./docker/android
+    <<: *android_build
     environment:
+      <<: *android_environment
       APP_NAME: edumeeting-asistencia
       ATTENDANCE_SIGNING_PUBLIC_KEY: ${ATTENDANCE_SIGNING_PUBLIC_KEY:-}
     volumes:

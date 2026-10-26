@@ -5,8 +5,15 @@ case "${APP_NAME:-}" in
     edumeeting-llamadas|edumeeting-asistencia) ;;
     *) echo "APP_NAME debe ser edumeeting-llamadas o edumeeting-asistencia." >&2; exit 1 ;;
 esac
+BUILD_TYPE="${BUILD_TYPE:-debug}"
+case "$BUILD_TYPE" in
+    debug) task=assembleDebug ;;
+    release) task=assembleRelease ;;
+    *) echo "BUILD_TYPE debe ser debug o release." >&2; exit 1 ;;
+esac
 
 workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
 # /source contiene la app y la librería compartida edumeeting-ui (incluida desde settings.gradle.kts).
 tar -C /source --exclude='.gradle' --exclude='build' \
     --exclude='local.properties' --exclude='.idea' -cf "$workdir/source.tar" .
@@ -21,6 +28,20 @@ if [ "$APP_NAME" = "edumeeting-asistencia" ]; then
     fi
     set -- "-PattendancePublicKey=$ATTENDANCE_SIGNING_PUBLIC_KEY"
 fi
+[ -n "${VERSION_CODE:-}" ] && set -- "$@" "-PversionCode=$VERSION_CODE"
+[ -n "${VERSION_NAME:-}" ] && set -- "$@" "-PversionName=$VERSION_NAME"
+
+if [ "$BUILD_TYPE" = "release" ]; then
+    # El keystore llega en Base64 (secreto de CI o .env) y solo vive en el directorio temporal.
+    if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+        printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$workdir/release.jks"
+        export EDUMEETING_KEYSTORE_FILE="$workdir/release.jks"
+    fi
+    if [ -z "${EDUMEETING_KEYSTORE_FILE:-}" ] && [ "${ALLOW_DEBUG_SIGNED_RELEASE:-0}" != "1" ]; then
+        echo "Falta ANDROID_KEYSTORE_BASE64 para firmar el release (o define ALLOW_DEBUG_SIGNED_RELEASE=1 para pruebas)." >&2
+        exit 1
+    fi
+fi
 
 set -- "$@" :edumeeting-ui:testDebugUnitTest :app:testDebugUnitTest
 
@@ -28,8 +49,8 @@ set -- "$@" :edumeeting-ui:testDebugUnitTest :app:testDebugUnitTest
 sh ./gradlew --no-daemon --console=plain --max-workers=2 \
     -Dorg.gradle.java.installations.auto-download=false \
     "$@" \
-    :app:assembleDebug
+    ":app:$task"
 
 mkdir -p /output
-cp app/build/outputs/apk/debug/app-debug.apk "/output/$APP_NAME-debug.apk"
-echo "APK generado: artifacts/android/$APP_NAME-debug.apk"
+cp "app/build/outputs/apk/$BUILD_TYPE/app-$BUILD_TYPE.apk" "/output/$APP_NAME-$BUILD_TYPE.apk"
+echo "APK generado: artifacts/android/$APP_NAME-$BUILD_TYPE.apk"

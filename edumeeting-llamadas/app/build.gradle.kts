@@ -4,6 +4,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Firma de release estable: variables de entorno (CI) o propiedades de Gradle (~/.gradle/gradle.properties).
+fun signingValue(environment: String, property: String): String? =
+    providers.environmentVariable(environment).orElse(providers.gradleProperty(property)).orNull?.takeIf { it.isNotBlank() }
+
+val releaseKeystore = signingValue("EDUMEETING_KEYSTORE_FILE", "edumeeting.keystore.file")
+val appVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 1
+val appVersionName = providers.gradleProperty("versionName").orNull?.takeIf { it.isNotBlank() } ?: "1.0.0"
+
 android {
     namespace = "org.edumeeting.llamadas"
     compileSdk = 35
@@ -12,8 +20,26 @@ android {
         applicationId = "org.edumeeting.llamadas"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = signingValue("EDUMEETING_KEYSTORE_PASSWORD", "edumeeting.keystore.password")
+                keyAlias = signingValue("EDUMEETING_KEY_ALIAS", "edumeeting.key.alias")
+                keyPassword = signingValue("EDUMEETING_KEY_PASSWORD", "edumeeting.key.password")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Sin keystore configurado se firma con la clave debug para poder probar el build localmente.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
     }
 
     buildFeatures { compose = true }

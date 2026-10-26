@@ -3,6 +3,7 @@ name: Android APKs
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - ".github/workflows/android-apks.yml"
       - "edumeeting-llamadas/**"
@@ -39,6 +40,10 @@ jobs:
         app: [llamadas, asistencia]
     env:
       ATTENDANCE_SIGNING_PUBLIC_KEY: ${{ vars.ATTENDANCE_SIGNING_PUBLIC_KEY }}
+      # Los tags v* generan un release firmado con el keystore estable; el resto, APKs debug.
+      BUILD_TYPE: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'debug' }}
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('0.0.0-dev.{0}', github.run_number) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +71,9 @@ jobs:
                   "Settings > Secrets and variables > Actions > Variables."
               )
 
+      - name: Normalize version name
+        run: echo "VERSION_NAME=${VERSION_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -79,12 +87,42 @@ jobs:
           cache-to: type=gha,mode=max,scope=android-builder
 
       - name: Test and build APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ env.BUILD_TYPE == 'release' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
+          EDUMEETING_KEYSTORE_PASSWORD: ${{ env.BUILD_TYPE == 'release' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
+          EDUMEETING_KEY_ALIAS: ${{ env.BUILD_TYPE == 'release' && secrets.ANDROID_KEY_ALIAS || '' }}
+          EDUMEETING_KEY_PASSWORD: ${{ env.BUILD_TYPE == 'release' && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: docker compose -f compose.android.yaml run --rm --pull never ${{ matrix.app }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: edumeeting-${{ matrix.app }}-debug
-          path: artifacts/android/edumeeting-${{ matrix.app }}-debug.apk
+          name: edumeeting-${{ matrix.app }}-${{ env.BUILD_TYPE }}
+          path: artifacts/android/edumeeting-${{ matrix.app }}-${{ env.BUILD_TYPE }}.apk
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: edumeeting-*-release
+          path: apks
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd apks
+          for apk in edumeeting-*-release.apk; do mv "$apk" "${apk%-release.apk}-${TAG}.apk"; done
+          sha256sum ./*.apk > SHA256SUMS.txt
+          gh release create "$TAG" ./*.apk SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "EduMeeting $TAG" --generate-notes
