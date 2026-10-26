@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -150,7 +151,6 @@ private fun DialScreen() {
     var meetingLocation by remember { mutableStateOf("") }
     var managedMeetings by remember { mutableStateOf<List<ManagedMeeting>>(emptyList()) }
     var destination by remember { mutableStateOf(DialDestination.Home) }
-    var passwordVisible by remember { mutableStateOf(false) }
     var expandedPersonId by remember { mutableStateOf<String?>(null) }
     val roleWorkspaceState = remember(activeMeetingId, api) { RoleWorkspaceState() }
     var editingMeetingId by remember { mutableStateOf<String?>(null) }
@@ -500,35 +500,22 @@ private fun DialScreen() {
                                             }
                                             api = sessionApi
                                             password = ""
-                                            passwordVisible = false
                                             loadMeetings(sessionApi)
                                             notice = "Sesión iniciada. Las acciones se validan con los permisos de tu cuenta."
                                         }
                                     }
-                                    OutlinedTextField(
-                                        value = serverUrl, onValueChange = { serverUrl = it }, label = { Text("URL HTTPS del servidor") },
-                                        enabled = preferencesLoaded && !busy,
-                                        leadingIcon = { Icon(Icons.Default.Lock, null) }, singleLine = true,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                                        modifier = Modifier.fillMaxWidth(),
+                                    FormTextField(
+                                        value = serverUrl, onValueChange = { serverUrl = it }, label = "URL HTTPS del servidor",
+                                        enabled = preferencesLoaded && !busy, leadingIcon = Icons.Default.Lock,
+                                        keyboardType = KeyboardType.Uri, modifier = Modifier.fillMaxWidth(),
                                     )
-                                    OutlinedTextField(
-                                        value = username, onValueChange = { username = it }, label = { Text("Usuario") },
-                                        leadingIcon = { Icon(Icons.Default.Person, null) }, singleLine = true,
-                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                                        modifier = Modifier.fillMaxWidth(),
+                                    FormTextField(
+                                        value = username, onValueChange = { username = it }, label = "Usuario",
+                                        leadingIcon = Icons.Default.Person, modifier = Modifier.fillMaxWidth(),
                                     )
-                                    OutlinedTextField(
-                                        value = password, onValueChange = { password = it }, label = { Text("Contraseña") },
-                                        leadingIcon = { Icon(Icons.Default.Lock, null) }, singleLine = true,
-                                        trailingIcon = { IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                            Icon(if (passwordVisible) Icons.Default.Lock else Icons.Default.Face, if (passwordVisible) "Ocultar contraseña" else "Mostrar contraseña")
-                                        } },
-                                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
-                                        keyboardActions = KeyboardActions(onGo = { if (canLogin) submitLogin() else focusManager.clearFocus() }),
+                                    PasswordField(
+                                        value = password, onValueChange = { password = it },
+                                        imeAction = ImeAction.Go, onSubmit = { if (canLogin) submitLogin() },
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                     Button(
@@ -612,35 +599,28 @@ private fun DialScreen() {
                                     )
                                     OutlinedButton(enabled = !busy, onClick = { clearMeetingForm() }) { ActionLabel("Nueva reunión", Icons.Default.Add) }
                                     Text("Zona horaria del servidor: $meetingTimezone", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    OutlinedTextField(
-                                        value = meetingNumber, onValueChange = { meetingNumber = it },
-                                        label = { Text("Número (1–99, único por día)") }, singleLine = true,
-                                        leadingIcon = { Icon(Icons.Default.Info, null) },
-                                        supportingText = { Text("Puede repetirse en reuniones de otra fecha.") },
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
-                                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
-                                        modifier = Modifier.fillMaxWidth(),
+                                    FormTextField(
+                                        value = meetingNumber, onValueChange = { meetingNumber = digitsOnly(it, 2) },
+                                        label = "Número (1–99, único por día)", leadingIcon = Icons.Default.Info,
+                                        supportingText = "Puede repetirse en reuniones de otra fecha.",
+                                        keyboardType = KeyboardType.Number, modifier = Modifier.fillMaxWidth(),
                                     )
-                                    OutlinedTextField(
+                                    FormTextField(
                                         value = meetingName, onValueChange = { meetingName = it },
-                                        label = { Text("Nombre de la reunión") }, singleLine = true,
-                                        leadingIcon = { Icon(Icons.Default.Edit, null) },
-                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                                        modifier = Modifier.fillMaxWidth(),
+                                        label = "Nombre de la reunión", leadingIcon = Icons.Default.Edit,
+                                        capitalization = KeyboardCapitalization.Sentences,
+                                        imeAction = ImeAction.Done, modifier = Modifier.fillMaxWidth(),
                                     )
                                     MeetingDateTimePickers(
                                         day = meetingDay, time = meetingTime, enabled = !busy,
                                         onDayChange = { meetingDay = it }, onTimeChange = { meetingTime = it },
                                     )
                                     AttendanceCodePreview(number = meetingNumber, day = meetingDay)
-                                    OutlinedTextField(
+                                    FormTextField(
                                         value = meetingLocation, onValueChange = { meetingLocation = it },
-                                        label = { Text("Lugar (opcional)") }, singleLine = true,
-                                        leadingIcon = { Icon(Icons.Default.Place, null) },
-                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                                        modifier = Modifier.fillMaxWidth(),
+                                        label = "Lugar (opcional)", leadingIcon = Icons.Default.Place,
+                                        capitalization = KeyboardCapitalization.Sentences,
+                                        imeAction = ImeAction.Done, modifier = Modifier.fillMaxWidth(),
                                     )
                                     Button(
                                         enabled = !busy && (meetingNumber.toIntOrNull() ?: 0) in 1..99 &&
@@ -776,17 +756,11 @@ private fun DialScreen() {
                             DialDestination.Search -> if (canOperate) {
                                 item {
                                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        OutlinedTextField(
-                                            value = query, onValueChange = { query = it }, label = { Text("Nombre o teléfono") },
-                                            supportingText = { Text("Deja vacío para listar participantes") },
-                                            leadingIcon = { Icon(Icons.Default.Search, null) },
-                                            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Limpiar búsqueda") } },
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                            keyboardActions = KeyboardActions(onSearch = {
-                                                focusManager.clearFocus()
-                                                if (!busy) searchPeople(1)
-                                            }),
+                                        FormTextField(
+                                            value = query, onValueChange = { query = it }, label = "Nombre o teléfono",
+                                            supportingText = "Deja vacío para listar participantes",
+                                            leadingIcon = Icons.Default.Search, clearable = true, clearDescription = "Limpiar búsqueda",
+                                            imeAction = ImeAction.Search, onSubmit = { if (!busy) searchPeople(1) },
                                             modifier = Modifier.fillMaxWidth(),
                                         )
                                         Button(enabled = !busy, onClick = { searchPeople(1) }, modifier = Modifier.fillMaxWidth()) { ActionLabel("Buscar participantes", Icons.Default.Search) }

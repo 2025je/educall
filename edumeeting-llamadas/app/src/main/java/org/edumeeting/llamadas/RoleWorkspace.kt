@@ -8,6 +8,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -137,19 +138,15 @@ internal fun RoleWorkspace(
             Text("Agrega una persona a la cola de la reunión activa.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedTextField(
-                        value = fullName, onValueChange = { fullName = it },
-                        label = { Text("Nombre completo") }, leadingIcon = { Icon(Icons.Default.Person, null) },
-                        modifier = Modifier.fillMaxWidth(), singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                    FormTextField(
+                        value = fullName, onValueChange = { fullName = it }, label = "Nombre completo",
+                        leadingIcon = Icons.Default.Person, capitalization = KeyboardCapitalization.Words,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    OutlinedTextField(
-                        value = phone, onValueChange = { phone = it },
-                        label = { Text("Teléfono") }, leadingIcon = { Icon(Icons.Default.Phone, null) },
-                        modifier = Modifier.fillMaxWidth(), singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    FormTextField(
+                        value = phone, onValueChange = { phone = it }, label = "Teléfono",
+                        leadingIcon = Icons.Default.Phone, keyboardType = KeyboardType.Phone,
+                        imeAction = ImeAction.Done, modifier = Modifier.fillMaxWidth(),
                     )
                     Row(Modifier.fillMaxWidth().clickable(enabled = !busy) { consent = !consent }, verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = consent, onCheckedChange = { consent = it }, enabled = !busy)

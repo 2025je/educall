@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -235,41 +236,41 @@ internal fun OfflineAttendanceSection(
                 false -> Admonition(AdmonitionKind.Warning, "Sin PIN") { Text("Define el PIN antes de exportar el paquete.") }
                 null -> Unit
             }
-            OutlinedTextField(
+            val canSavePin = !busy && pin.length >= 6 && pin == pinConfirmation
+            fun savePin() {
+                if (!canSavePin) return
+                runRequest {
+                    withContext(Dispatchers.IO) {
+                        api.post("/api/v1/meetings/$meetingId/attendance-pin/", JSONObject().put("pin", pin))
+                    }
+                    pinConfigured = true
+                    pin = ""
+                    pinConfirmation = ""
+                    onNotice("PIN guardado. Exporta un paquete nuevo para los teléfonos.")
+                }
+            }
+            PinField(
                 value = pin,
-                onValueChange = { value -> pin = value.filter(Char::isDigit).take(8) },
-                label = { Text(if (pinConfigured == true) "Nuevo PIN (6 a 8 dígitos)" else "PIN (6 a 8 dígitos)") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Next),
-                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                onValueChange = { pin = it },
+                label = if (pinConfigured == true) "Nuevo PIN (6 a 8 dígitos)" else "PIN (6 a 8 dígitos)",
+                imeAction = ImeAction.Next,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
+            PinField(
                 value = pinConfirmation,
-                onValueChange = { value -> pinConfirmation = value.filter(Char::isDigit).take(8) },
-                label = { Text("Repite el PIN") },
-                singleLine = true,
+                onValueChange = { pinConfirmation = it },
+                label = "Repite el PIN",
                 isError = pinConfirmation.isNotEmpty() && pinConfirmation != pin,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                supportingText = if (pinConfirmation.isNotEmpty() && pinConfirmation != pin) "Los PIN no coinciden." else null,
+                onSubmit = { savePin() },
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(
-                enabled = !busy && pin.length >= 6 && pin == pinConfirmation,
+                enabled = canSavePin,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     focusManager.clearFocus()
-                    runRequest {
-                        withContext(Dispatchers.IO) {
-                            api.post("/api/v1/meetings/$meetingId/attendance-pin/", JSONObject().put("pin", pin))
-                        }
-                        pinConfigured = true
-                        pin = ""
-                        pinConfirmation = ""
-                        onNotice("PIN guardado. Exporta un paquete nuevo para los teléfonos.")
-                    }
+                    savePin()
                 },
             ) { ActionLabel("Guardar PIN", Icons.Default.Lock) }
         }
@@ -371,14 +372,14 @@ private fun ConflictCard(
                     }
                 }
             }
-            OutlinedTextField(
+            FormTextField(
                 value = state.resolutions[id].orEmpty(),
                 onValueChange = { state.resolutions[id] = it.take(500) },
-                label = { Text("Motivo de la resolución") },
+                label = "Motivo de la resolución",
+                capitalization = KeyboardCapitalization.Sentences,
+                imeAction = ImeAction.Done,
+                onSubmit = onDone,
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onDone() }),
             )
             val keepId = state.keepChoices[id]
             val resolution = state.resolutions[id].orEmpty().trim()
