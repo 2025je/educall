@@ -45,7 +45,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -53,14 +57,29 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-enum class AdmonitionKind(val title: String, val color: Color, val icon: ImageVector) {
-    Note("Nota", Color(0xFF448AFF), Icons.Default.Edit),
-    Info("Información", Color(0xFF00B8D4), Icons.Default.Info),
-    Success("Completado", Color(0xFF00A86B), Icons.Default.CheckCircle),
-    Warning("Atención", Color(0xFFFF9100), Icons.Default.Warning),
-    Danger("Error", Color(0xFFD32F2F), Icons.Default.Warning),
-    Example("Ejemplo", Color(0xFF7C4DFF), Icons.AutoMirrored.Filled.List),
+/**
+ * Tipos de aviso. [color] es el acento (barra, borde, icono); para texto se usan [lightText] y
+ * [darkText], que cumplen contraste WCAG AA (4.5:1) sobre el fondo claro u oscuro del aviso.
+ */
+enum class AdmonitionKind(
+    val title: String,
+    val color: Color,
+    val icon: ImageVector,
+    val lightText: Color,
+    val darkText: Color,
+) {
+    Note("Nota", Color(0xFF448AFF), Icons.Default.Edit, Color(0xFF1D4ED8), Color(0xFF7FADFF)),
+    Info("Información", Color(0xFF00B8D4), Icons.Default.Info, Color(0xFF0E7490), Color(0xFF4DD8EE)),
+    Success("Completado", Color(0xFF00A86B), Icons.Default.CheckCircle, Color(0xFF047857), Color(0xFF34D399)),
+    Warning("Atención", Color(0xFFFF9100), Icons.Default.Warning, Color(0xFFB45309), Color(0xFFFFB04D)),
+    Danger("Error", Color(0xFFD32F2F), Icons.Default.Warning, Color(0xFFB91C1C), Color(0xFFFF8A80)),
+    Example("Ejemplo", Color(0xFF7C4DFF), Icons.AutoMirrored.Filled.List, Color(0xFF6D28D9), Color(0xFFB39DFF)),
 }
+
+/** Color de texto legible para el tipo de aviso según el tema activo. */
+@Composable
+fun AdmonitionKind.textColor(): Color =
+    if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) lightText else darkText
 
 private val CardShape = RoundedCornerShape(12.dp)
 private val AdmonitionShape = RoundedCornerShape(10.dp)
@@ -68,7 +87,8 @@ private val AdmonitionShape = RoundedCornerShape(10.dp)
 /** Aviso con el título del tipo (Nota, Atención…) y un mensaje corto. */
 @Composable
 fun Admonition(message: String, kind: AdmonitionKind = AdmonitionKind.Note) {
-    Admonition(kind, kind.title) {
+    // Sin controles dentro: TalkBack lee título y mensaje juntos.
+    Admonition(kind, kind.title, Modifier.semantics(mergeDescendants = true) {}) {
         Text(message, style = MaterialTheme.typography.bodyMedium)
     }
 }
@@ -93,7 +113,7 @@ fun Admonition(
             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(kind.icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(20.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(title, fontWeight = FontWeight.Bold, color = kind.color, style = MaterialTheme.typography.labelLarge)
+                    Text(title, fontWeight = FontWeight.Bold, color = kind.textColor(), style = MaterialTheme.typography.labelLarge)
                     content()
                 }
             }
@@ -152,7 +172,7 @@ fun ActionLabel(text: String, icon: ImageVector) {
 fun SectionHeading(title: String, modifier: Modifier = Modifier) {
     Text(
         title,
-        modifier = modifier,
+        modifier = modifier.semantics { heading() },
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onSurface,
     )
@@ -161,7 +181,12 @@ fun SectionHeading(title: String, modifier: Modifier = Modifier) {
 @Composable
 fun ScreenHeader(title: String, description: String) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            title,
+            modifier = Modifier.semantics { heading() },
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
         Text(description, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -262,7 +287,7 @@ fun GridCard(
 
 @Composable
 fun StatCard(icon: ImageVector, value: String, label: String, modifier: Modifier = Modifier) {
-    OutlinedPanel(modifier = modifier, containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+    OutlinedPanel(modifier = modifier.semantics(mergeDescendants = true) {}, containerColor = MaterialTheme.colorScheme.surfaceVariant) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
             Text(value, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
@@ -298,7 +323,7 @@ fun EmptyState(
         ) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
         }
-        Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Text(title, Modifier.semantics { heading() }, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
         Text(
             message,
             style = MaterialTheme.typography.bodyLarge,
@@ -388,7 +413,14 @@ fun NoticeSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) 
     SnackbarHost(state, modifier.navigationBarsPadding()) { data ->
         val kind = (data.visuals as? NoticeVisuals)?.kind ?: AdmonitionKind.Info
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            // Region viva: TalkBack anuncia el aviso aunque el foco esté en otra parte de la pantalla.
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).semantics {
+                liveRegion = if (kind == AdmonitionKind.Danger || kind == AdmonitionKind.Warning) {
+                    LiveRegionMode.Assertive
+                } else {
+                    LiveRegionMode.Polite
+                }
+            },
             shape = AdmonitionShape,
             color = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -404,7 +436,7 @@ fun NoticeSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) 
                     modifier = Modifier.padding(start = 12.dp, top = 12.dp).size(20.dp),
                 )
                 Column(Modifier.weight(1f).padding(start = 10.dp, top = 10.dp, bottom = 10.dp)) {
-                    Text(kind.title, fontWeight = FontWeight.Bold, color = kind.color)
+                    Text(kind.title, fontWeight = FontWeight.Bold, color = kind.textColor())
                     Text(data.visuals.message, style = MaterialTheme.typography.bodyMedium)
                 }
                 TextButton(
