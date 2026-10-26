@@ -1,0 +1,85 @@
+name: Android APKs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/android-apks.yml"
+      - "edumeeting-llamadas/**"
+      - "edumeeting-asistencia/**"
+      - "docker/android/**"
+      - "compose.android.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/android-apks.yml"
+      - "edumeeting-llamadas/**"
+      - "edumeeting-asistencia/**"
+      - "docker/android/**"
+      - "compose.android.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: APK ${{ matrix.app }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [llamadas, asistencia]
+    env:
+      ATTENDANCE_SIGNING_PUBLIC_KEY: ${{ vars.ATTENDANCE_SIGNING_PUBLIC_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate attendance public key
+        if: matrix.app == 'asistencia'
+        shell: python
+        run: |
+          import base64
+          import binascii
+          import os
+
+          key = os.environ.get("ATTENDANCE_SIGNING_PUBLIC_KEY", "")
+          try:
+              valid = len(base64.b64decode(key, validate=True)) == 32
+          except (ValueError, binascii.Error):
+              valid = False
+          if not valid:
+              raise SystemExit(
+                  "Configura la variable de repositorio ATTENDANCE_SIGNING_PUBLIC_KEY "
+                  "con la clave publica Ed25519 del servidor (32 bytes en Base64). "
+                  "Settings > Secrets and variables > Actions > Variables."
+              )
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Android builder
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/android
+          load: true
+          tags: edumeeting-android-builder:latest
+          cache-from: type=gha,scope=android-builder
+          cache-to: type=gha,mode=max,scope=android-builder
+
+      - name: Test and build APK
+        run: docker compose -f compose.android.yaml run --rm --pull never ${{ matrix.app }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: edumeeting-${{ matrix.app }}-debug
+          path: artifacts/android/edumeeting-${{ matrix.app }}-debug.apk
+          if-no-files-found: error
+          retention-days: 14

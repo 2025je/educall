@@ -350,6 +350,30 @@ Vuelve a ejecutar `build llamadas` si cambia el Dockerfile o el script del const
 
 Los contenedores de compilación terminan al generar cada APK. No necesitan acceso USB ni ejecutan un emulador. Copia el APK al teléfono e instálalo autorizando la instalación desde esa fuente; para pruebas por USB usa Android Platform-Tools (`adb install -r ruta-al-apk`) en el equipo.
 
+### APK automáticos en GitHub Actions
+
+El workflow [Android APKs](./.github/workflows/android-apks.yml) compila **Llamadas y Asistencia** en jobs independientes usando el mismo constructor Docker de la compilación local. Se ejecuta al subir cambios Android o del constructor a `main`, al abrir o actualizar un pull request hacia `main` con esos cambios y manualmente desde **Actions → Android APKs → Run workflow**. Los cambios exclusivos del servidor no recompilan los APK.
+
+Antes de la primera ejecución, configura en GitHub **Settings → Secrets and variables → Actions → Variables → New repository variable**:
+
+| Variable | Valor |
+|---|---|
+| `ATTENDANCE_SIGNING_PUBLIC_KEY` | La clave **pública** Ed25519 del servidor, de 32 bytes codificados en Base64; la misma utilizada al compilar Asistencia localmente. |
+
+No subas `.env`, claves privadas de firma, credenciales de PostgreSQL ni certificados privados. La clave pública se incluye intencionadamente en Asistencia para verificar los paquetes del servidor. Si falta o es inválida, su job falla con un mensaje explícito; no se genera un APK con una clave ficticia. Llamadas puede compilar de forma independiente.
+
+Para descargar los APK:
+
+1. Abre **Actions → Android APKs** y selecciona una ejecución correcta.
+2. En **Artifacts**, descarga `edumeeting-llamadas-debug` y `edumeeting-asistencia-debug`.
+3. Descomprime los ZIP para obtener los archivos `.apk`. Los artefactos se conservan **14 días**.
+
+Llamadas ejecuta sus pruebas unitarias antes de generar el APK. El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
+
+Son APK **debug**, no versiones de producción. Cada job utiliza una firma debug temporal: no se garantiza la misma firma entre ejecuciones ni respecto a los APK locales. Android puede exigir desinstalar una versión anterior para instalar estos APK, lo que elimina los datos locales; exporta primero los datos de Asistencia. Para actualizaciones persistentes o distribución de producción se necesita un almacén de firma estable y protegido, que este workflow no configura.
+
+La configuración se activa cuando el workflow y el código de las apps se suben al repositorio; crear el archivo localmente no inicia una ejecución remota.
+
 ### Opción B: Android Studio
 
 ### Requisitos comunes
