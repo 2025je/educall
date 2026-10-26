@@ -43,6 +43,20 @@ if [ "$BUILD_TYPE" = "release" ]; then
     fi
 fi
 
+# Capturas de edumeeting-ui (Roborazzi): verify compara con las referencias versionadas,
+# record las regenera y las copia a artifacts/android/screenshots, off solo ejecuta las pruebas.
+screenshots_dir="$workdir/edumeeting-ui/src/test/screenshots"
+SCREENSHOTS="${SCREENSHOTS:-auto}"
+if [ "$SCREENSHOTS" = "auto" ]; then
+    if ls "$screenshots_dir"/*.png >/dev/null 2>&1; then SCREENSHOTS=verify; else SCREENSHOTS=off; fi
+fi
+case "$SCREENSHOTS" in
+    verify) set -- "$@" -Proborazzi.test.verify=true ;;
+    record) rm -rf "$screenshots_dir"; set -- "$@" -Proborazzi.test.record=true ;;
+    off) ;;
+    *) echo "SCREENSHOTS debe ser auto, verify, record u off." >&2; exit 1 ;;
+esac
+
 set -- "$@" :edumeeting-ui:testDebugUnitTest :app:testDebugUnitTest
 
 # Wrapper del proyecto: misma versión de Gradle en Docker, CI y Android Studio.
@@ -52,5 +66,10 @@ sh ./gradlew --no-daemon --console=plain --max-workers=2 \
     ":app:$task"
 
 mkdir -p /output
+if [ "$SCREENSHOTS" = "record" ]; then
+    rm -rf /output/screenshots
+    cp -r "$screenshots_dir" /output/screenshots
+    echo "Capturas de referencia: artifacts/android/screenshots (copialas a edumeeting-ui/src/test/screenshots)."
+fi
 cp "app/build/outputs/apk/$BUILD_TYPE/app-$BUILD_TYPE.apk" "/output/$APP_NAME-$BUILD_TYPE.apk"
 echo "APK generado: artifacts/android/$APP_NAME-$BUILD_TYPE.apk"

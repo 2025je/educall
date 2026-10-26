@@ -12,6 +12,7 @@ x-android-build: &android_build
     EDUMEETING_KEY_ALIAS: ${EDUMEETING_KEY_ALIAS:-}
     EDUMEETING_KEY_PASSWORD: ${EDUMEETING_KEY_PASSWORD:-}
     ALLOW_DEBUG_SIGNED_RELEASE: ${ALLOW_DEBUG_SIGNED_RELEASE:-0}
+    SCREENSHOTS: ${SCREENSHOTS:-auto}
 
 services:
   llamadas:
@@ -25,6 +26,8 @@ services:
       - ./artifacts/android:/output
       - gradle_cache:/root/.gradle
       - android_debug_keys:/root/.android
+      # Robolectric descarga android-all la primera vez a ~/.m2.
+      - robolectric_cache:/root/.m2
 
   asistencia:
     <<: *android_build
@@ -38,7 +41,10 @@ services:
       - ./artifacts/android:/output
       - gradle_cache:/root/.gradle
       - android_debug_keys:/root/.android
+      # Robolectric descarga android-all la primera vez a ~/.m2.
+      - robolectric_cache:/root/.m2
 
 volumes:
   gradle_cache:
   android_debug_keys:
+  robolectric_cache:
