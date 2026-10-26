@@ -111,6 +111,8 @@ SECURE_COOKIES = not DEBUG or os.environ.get("DJANGO_SECURE_COOKIES") == "1"
 SESSION_COOKIE_SECURE = SECURE_COOKIES
 CSRF_COOKIE_SECURE = SECURE_COOKIES
 SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "0" if DEBUG else "1") == "1"
+# Los healthchecks de Docker consultan por HTTP dentro de la red interna.
+SECURE_REDIRECT_EXEMPT = [r"^health/$"]
 SECURE_PROXY_SSL_HEADER = (
     ("HTTP_X_FORWARDED_PROTO", "https")
     if os.environ.get("DJANGO_TRUST_X_FORWARDED_PROTO") == "1"
@@ -183,3 +185,24 @@ CELERY_BEAT_SCHEDULE = {
     "purge-expired-exports": {"task": "attendance.tasks.purge_expired_exports", "schedule": 3600},
 }
 AUDITLOG_DISABLE_REMOTE_ADDR = True
+
+LOG_LEVEL = os.environ.get("DJANGO_LOG_LEVEL", "INFO").upper()
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "standard"},
+    },
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {
+        "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "edumeeting": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "attendance": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "api": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "celery": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
