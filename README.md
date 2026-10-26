@@ -164,6 +164,38 @@ docker compose exec -e EDUMEETING_TEST_LIVE_SERVICES=1 web python manage.py test
 
 Comprueban la entrega de eventos mediante Redis y generan un paquete firmado con un worker Celery temporal, una cola exclusiva y la base de datos de pruebas. El worker temporal se detiene al finalizar. No ejecutes dos suites a la vez sobre la misma base de datos de pruebas.
 
+### CI del servidor
+
+El workflow [Server tests](./.github/workflows/server-tests.yml) se ejecuta en cada cambio de `edumeeting-server` (push a `main`, pull requests y manualmente). Levanta PostgreSQL 17 y Redis 7 como servicios, instala Python 3.12 y ejecuta `check`, `makemigrations --check` y **todas** las pruebas con `EDUMEETING_TEST_LIVE_SERVICES=1`, incluidas las de concurrencia, Redis y el worker Celery temporal. No necesita secretos.
+
+### Salud y monitorización
+
+`GET /health/` (sin sesión) comprueba la base de datos y Redis; `GET /health/?full=1` añade un `ping` a los workers Celery. Responde `200` con `{"status": "ok", "checks": {...}}` y el tiempo de cada comprobación, o `503` si algo falla. Nunca incluye mensajes de error ni datos internos: la causa se registra en el log `edumeeting.health` del contenedor web. No se cachea y queda exenta de la redirección HTTPS para que la usen los healthchecks internos.
+
+```powershell
+curl.exe -k https://192.168.1.41/health/
+curl.exe -k "https://192.168.1.41/health/?full=1"
+docker compose logs --tail=100 web | Select-String edumeeting.health
+```
+
+Los healthchecks de Compose usan `/health/` para `web` y `celery inspect ping` para `worker`; `docker compose ps` muestra `healthy` o `unhealthy`. Apunta tu monitor externo (Uptime Kuma, UptimeRobot, etc.) a `/health/?full=1`. El nivel de log se ajusta con `DJANGO_LOG_LEVEL` (por defecto `INFO`).
+
+### Respaldos de PostgreSQL
+
+- **Antes de migrar:** el servicio `backup-before-migrate` hace un respaldo en cada `up`; `web` no arranca (ni aplica migraciones) si falla.
+- **Programado:** el servicio `backup` respalda cada 24 horas (`BACKUP_INTERVAL_HOURS`) y borra los de más de 14 días (`BACKUP_RETENTION_DAYS`).
+- Los archivos (`pg_dump -Fc`) se guardan en `.\backups` (`BACKUP_DIR` en `.env`), excluida de Git. Copia esa carpeta periódicamente a otro disco o a la nube: un respaldo en el mismo equipo no protege de su pérdida.
+
+```powershell
+# Respaldo manual con etiqueta
+.\scripts\backup-db.ps1 -Label antes-de-cambios
+
+# Restaurar (pide confirmación; sin -File usa el respaldo más reciente)
+.\scripts\restore-db.ps1 -File .\backups\edumeeting-20261026T125546Z-antes-de-cambios.dump
+```
+
+`restore-db.ps1` hace primero un respaldo `antes-de-restaurar`, detiene web, worker, scheduler y HTTPS, restaura en una sola transacción (si falla, la base queda como estaba) y vuelve a levantar los servicios esperando a que estén sanos. Ambos scripts usan también `compose.local-https.yaml` cuando existe.
+
 ## Configuración inicial de EduMeeting Server
 
 1. El superusuario crea las cuentas y asigna los grupos `ADMINISTRADOR`, `REGISTRAR` u `OPERADOR`, desde **Usuarios y grupos** (`/users/`), desde `/admin/` o con el comando interactivo siguiente.
@@ -368,9 +400,43 @@ Para descargar los APK:
 2. En **Artifacts**, descarga `edumeeting-llamadas-debug` y `edumeeting-asistencia-debug`.
 3. Descomprime los ZIP para obtener los archivos `.apk`. Los artefactos se conservan **14 días**.
 
-Ambas apps ejecutan sus pruebas unitarias y las de `edumeeting-ui` antes de generar el APK (en Asistencia, entre otras, la verificación del PIN con un hash real de Django); un cambio en la librería recompila los dos APK. El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
+Ambas apps ejecutan sus pruebas unitarias y las de `edumeeting-ui` (incluidas las capturas de pantalla) antes de generar el APK (en Asistencia, entre otras, la verificación del PIN con un hash real de Django); un cambio en la librería recompila los dos APK. El constructor se cachea para acelerar ejecuciones posteriores y se valida el checksum del Gradle wrapper.
 
-Son APK **debug**, no versiones de producción. Cada job utiliza una firma debug temporal: no se garantiza la misma firma entre ejecuciones ni respecto a los APK locales. Android puede exigir desinstalar una versión anterior para instalar estos APK, lo que elimina los datos locales; exporta primero los datos de Asistencia. Para actualizaciones persistentes o distribución de producción se necesita un almacén de firma estable y protegido, que este workflow no configura.
+Los APK de `main` y de los pull requests son **debug** (versión `0.0.0-dev.N`): cada job utiliza una firma debug temporal, distinta de la local. Android puede exigir desinstalar una versión anterior para instalarlos, lo que elimina los datos locales; exporta primero los datos de Asistencia.
+
+### Versiones publicadas (releases firmadas)
+
+Al subir una etiqueta `vX.Y.Z`, el workflow compila ambas apps en modo **release**, firmadas con tu almacén de claves, con `versionName` = `X.Y.Z` y `versionCode` = número de ejecución (siempre creciente), y crea una **GitHub Release** con `edumeeting-llamadas-vX.Y.Z.apk`, `edumeeting-asistencia-vX.Y.Z.apk` y `SHA256SUMS.txt`.
+
+1. Crea el almacén **una sola vez** y guárdalo fuera del repositorio, con copia de seguridad. Si lo pierdes no podrás publicar actualizaciones que se instalen sobre las anteriores:
+
+   ```powershell
+   keytool -genkeypair -v -keystore edumeeting-release.jks -alias edumeeting -keyalg RSA -keysize 4096 -validity 10000
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("edumeeting-release.jks")) | Set-Clipboard
+   ```
+
+   `keytool` viene con el JDK 17 (o con Android Studio en `jbr\bin`).
+2. En GitHub, **Settings → Secrets and variables → Actions → Secrets**, crea:
+
+   | Secreto | Valor |
+   |---|---|
+   | `ANDROID_KEYSTORE_BASE64` | El contenido Base64 copiado en el paso anterior. |
+   | `ANDROID_KEYSTORE_PASSWORD` | Contraseña del almacén. |
+   | `ANDROID_KEY_ALIAS` | `edumeeting` (el alias usado). |
+   | `ANDROID_KEY_PASSWORD` | Contraseña de la clave (la misma del almacén si no elegiste otra). |
+
+3. Publica una versión:
+
+   ```powershell
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+Los secretos solo se pasan a las compilaciones de etiquetas y el job `release` es el único con permiso de escritura. Si faltan, la compilación release falla en lugar de firmar con una clave debug.
+
+Para compilar un release localmente con Docker define las mismas variables en `.env` o en la terminal (`BUILD_TYPE=release`, `ANDROID_KEYSTORE_BASE64`, `EDUMEETING_KEYSTORE_PASSWORD`, `EDUMEETING_KEY_ALIAS`, `EDUMEETING_KEY_PASSWORD` y opcionalmente `VERSION_CODE`/`VERSION_NAME`); el APK se guarda como `artifacts\android\edumeeting-<app>-release.apk`. En Android Studio, las mismas propiedades se leen de las variables de entorno `EDUMEETING_KEYSTORE_FILE`, `EDUMEETING_KEYSTORE_PASSWORD`, `EDUMEETING_KEY_ALIAS` y `EDUMEETING_KEY_PASSWORD`.
+
+**Cambio de debug a release:** Android no permite actualizar una app firmada con otra clave. Para pasar de los APK debug a los firmados hay que desinstalar la app una vez (se borran sus datos): en Asistencia, **exporta antes todas las asistencias pendientes**; en Llamadas solo hay que volver a iniciar sesión. A partir de ahí, cada release se instala encima de la anterior conservando los datos.
 
 La configuración se activa cuando el workflow y el código de las apps se suben al repositorio; crear el archivo localmente no inicia una ejecución remota.
 
@@ -381,7 +447,7 @@ La configuración se activa cuando el workflow y el código de las apps se suben
 - Android Studio compatible con Android Gradle Plugin **8.9.1**.
 - **JDK 17** configurado como Gradle JDK.
 - Android SDK Platform **35**, Android SDK Build-Tools **35.0.0** y Platform-Tools, instalados desde SDK Manager.
-- **Gradle 8.11.1** instalado y disponible en `PATH` para generar el wrapper inicial. Actualmente el repositorio no incluye `gradlew.bat` ni el JAR del wrapper.
+- No necesitas instalar Gradle: cada app incluye el **Gradle wrapper 8.11.1** (`gradlew.bat`, `gradlew` y `gradle\wrapper\`), con el checksum de la distribución fijado. Docker, GitHub Actions y Android Studio usan así la misma versión.
 - Conexión a internet para descargar las dependencias.
 - Teléfono o emulador con Android **9 / API 28 o superior**.
 
@@ -389,7 +455,6 @@ Comprueba las herramientas:
 
 ```powershell
 java -version
-gradle -v
 ```
 
 Abre por separado [edumeeting-llamadas](./edumeeting-llamadas/) y [edumeeting-asistencia](./edumeeting-asistencia/) con **File → Open** de Android Studio. Configura JDK 17 en **Settings → Build, Execution, Deployment → Build Tools → Gradle**. Android Studio debe configurar la ruta del SDK en el archivo local de cada proyecto; no subas esa ruta a Git.
@@ -400,7 +465,6 @@ Desde la raíz del repositorio:
 
 ```powershell
 Set-Location .\edumeeting-llamadas
-gradle wrapper --gradle-version 8.11.1
 .\gradlew.bat assembleDebug
 ```
 
@@ -429,7 +493,8 @@ El estilo y los componentes comunes viven en un solo lugar, [edumeeting-ui](./ed
 |---|---|
 | `Theme.kt` | Paleta clara/oscura, tipografía y formas estilo Zensical; `EduMeetingTheme(dark)` y `ColorScheme.accent`. |
 | `ThemePreferences.kt` | `EduMeetingTheme { theme -> }` que recuerda claro/oscuro/sistema (DataStore `appearance`) y expone `ThemeState` (`dark`, `toggle`, `followsSystem`, `followSystem`). |
-| `Components.kt` | `Admonition` y `AdmonitionKind`, avisos flotantes (`showNotice`, `NoticeSnackbarHost`), `ScreenHeader`, `SectionHeading`, `OutlinedPanel`, `GridCard`, `StatCard`, `EmptyState`, `PrimaryButton`, `SecondaryButton`, `IconBadge`, `InitialsAvatar`, `DocSection`, `CodeText`, `ActionLabel` y `ThemeGlyph`. |
+| `Components.kt` | `Admonition` y `AdmonitionKind` (con `textColor()` accesible), avisos flotantes (`showNotice`, `NoticeSnackbarHost`), `ScreenHeader`, `SectionHeading`, `OutlinedPanel`, `GridCard`, `StatCard`, `EmptyState`, `PrimaryButton`, `SecondaryButton`, `IconBadge`, `InitialsAvatar`, `DocSection`, `CodeText`, `ActionLabel` y `ThemeGlyph`. |
+| `Fields.kt` | Campos de formulario: `FormTextField` (icono, ayuda/error, botón de borrar, teclado y acción **Siguiente** que salta al siguiente campo o `onSubmit`), `PasswordField` (mostrar/ocultar), `PinField` (solo dígitos, oculto) y `digitsOnly`. Todos los formularios de ambas apps los usan. |
 
 Cada app la incluye desde su `settings.gradle.kts`:
 
@@ -438,7 +503,36 @@ include(":edumeeting-ui")
 project(":edumeeting-ui").projectDir = file("../edumeeting-ui")
 ```
 
-y la declara en `app/build.gradle.kts` con `implementation(project(":edumeeting-ui"))`; en el código basta `import org.edumeeting.ui.*`. Lo específico de cada pantalla (navegación, formularios, lógica) permanece en su app. La librería tiene sus propias pruebas unitarias (preferencia de tema y duración de los avisos), que se ejecutan al compilar cualquiera de las dos apps. Por eso, en Android Studio o Docker la carpeta `edumeeting-ui` debe estar junto a `edumeeting-llamadas` y `edumeeting-asistencia`.
+y la declara en `app/build.gradle.kts` con `implementation(project(":edumeeting-ui"))`; en el código basta `import org.edumeeting.ui.*`. Lo específico de cada pantalla (navegación, formularios, lógica) permanece en su app. La librería tiene sus propias pruebas unitarias (preferencia de tema, duración de los avisos, `digitsOnly`, contraste de colores y capturas de pantalla), que se ejecutan al compilar cualquiera de las dos apps.
+
+##### Accesibilidad
+
+- Los títulos de los avisos usan colores con contraste **WCAG AA** (≥ 4,5:1) en tema claro y oscuro; el color de acento se conserva en la barra, el borde y el icono. `ContrastTest` lo comprueba para cada tipo de aviso.
+- `ScreenHeader`, `SectionHeading` y el título de `EmptyState` se marcan como **encabezados**: TalkBack permite saltar entre secciones.
+- Los avisos flotantes son regiones vivas: TalkBack los lee al aparecer (los errores y advertencias interrumpen; el resto espera). Los avisos y las tarjetas de contadores se leen como una sola unidad.
+- Los iconos decorativos no se anuncian; los botones solo de icono (borrar, mostrar contraseña, tema, menú) tienen descripción. Los botones y campos miden al menos 48 dp.
+
+##### Pruebas de capturas (Roborazzi)
+
+`ComponentsScreenshotTest` renderiza con Robolectric los avisos y los controles (encabezados, campos, botones y contadores) en tema claro y oscuro, y los compara con las referencias de [edumeeting-ui/src/test/screenshots](./edumeeting-ui/src/test/screenshots/). Si un cambio altera el aspecto, la compilación falla. El modo se elige con la variable `SCREENSHOTS` del constructor Docker:
+
+| Valor | Efecto |
+|---|---|
+| `auto` (por defecto) | `verify` si existen referencias; si no, solo ejecuta las pruebas. |
+| `verify` | Compara con las referencias y falla ante cualquier diferencia. |
+| `record` | Regenera las referencias y las copia a `artifacts\android\screenshots`. |
+| `off` | No compara. |
+
+Cuando el cambio visual es intencionado:
+
+```powershell
+$env:SCREENSHOTS = "record"
+docker compose -f compose.android.yaml run --rm --pull never llamadas
+Remove-Item Env:\SCREENSHOTS
+Copy-Item artifacts\android\screenshots\*.png edumeeting-ui\src\test\screenshots\
+```
+
+Revisa las imágenes antes de hacer commit. Las referencias se generan siempre con el constructor Docker (las fuentes de otro sistema darían diferencias). La primera ejecución descarga el runtime Android de Robolectric (~100 MB) al volumen `robolectric_cache`. Por eso, en Android Studio o Docker la carpeta `edumeeting-ui` debe estar junto a `edumeeting-llamadas` y `edumeeting-asistencia`.
 
 **Conexión:** introduce una URL `https://` con certificado válido y accesible desde el dispositivo. El servidor local Docker de esta guía solo ofrece HTTP y, por tanto, **no basta para conectar EduMeeting Llamadas**. Necesitas publicar el servidor detrás de HTTPS; no desactives la validación de certificados. `localhost` en un teléfono es el teléfono, no tu computadora.
 
@@ -515,7 +609,6 @@ Desde una nueva terminal en la raíz del repositorio:
 
 ```powershell
 Set-Location .\edumeeting-asistencia
-gradle wrapper --gradle-version 8.11.1
 .\gradlew.bat assembleDebug
 ```
 
@@ -559,7 +652,7 @@ En el teléfono, abre **Opciones de desarrollador → Depuración inalámbrica**
 
 Las actualizaciones usan `adb install -r`, por lo que se conservan los datos y la sesión de la app.
 
-Para distribuir fuera de pruebas, usa **Build → Generate Signed App Bundle or APK**, crea o selecciona tu almacén de claves y elige APK o AAB según el canal. Conserva ese almacén y su contraseña fuera del repositorio: los necesitas para publicar actualizaciones. No distribuyas el APK debug como versión de producción.
+Para distribuir fuera de pruebas usa las versiones firmadas de [Versiones publicadas](#versiones-publicadas-releases-firmadas) (o **Build → Generate Signed App Bundle or APK** con el mismo almacén). No distribuyas el APK debug como versión de producción.
 
 Se verificó la compilación Docker de ambas apps, sus pruebas unitarias y la firma de sus APK debug, y ambas se instalaron en un teléfono mediante `scripts\install-apks.ps1`. Los APK generados quedan fuera de Git. Siguen pendientes pruebas funcionales completas en el dispositivo (cámara, QR, llamadas, WhatsApp y el flujo PIN → registro → combinación con varios teléfonos).
 
@@ -579,8 +672,8 @@ La app Asistencia nunca se conecta al servidor y no usa cuentas: cada reunión t
 4. Selecciona y confirma explícitamente la reunión de trabajo. La selección persiste y no cambia por escanear, buscar o importar.
 5. En **Identificación**, cada persona escribe su nombre y el PIN. Tras 5 intentos fallidos la app bloquea el PIN durante 60 s. **Cerrar sesión** permite que otra persona use el mismo teléfono.
 6. Registra por QR o búsqueda de nombre, teléfono o código. La cámara es opcional; se evitan duplicados locales por participante y reunión efectiva.
-7. Exporta los resultados `.attendance-results` de cada teléfono. Las asistencias permanecen en el dispositivo.
-8. En **Importar y combinar resultados**, elige a la vez los archivos de todos los teléfonos (hasta 20; o usa `POST /api/v1/attendance/import/` una vez por archivo, campo multipart `file`). Cada archivo se importa por separado, se informa cuántos registros aportó cada persona y la web muestra la tabla **Registros por persona**. Reimportar un archivo es seguro; un archivo de otra reunión se rechaza sin afectar a los demás.
+7. Exporta los resultados `.attendance-results` de cada teléfono. Las asistencias permanecen en el dispositivo. Inicio y **Exportar** muestran el **estado de sincronización**: cuántas asistencias faltan por exportar en la reunión (y en otras reuniones del teléfono), la fecha de la última exportación y un acceso directo para exportar.
+8. En **Importar y combinar resultados**, elige a la vez los archivos de todos los teléfonos (hasta 20; o usa `POST /api/v1/attendance/import/` una vez por archivo, campo multipart `file`). En Llamadas, antes de importar se muestra una **vista previa** por archivo (registros nuevos, duplicados, conflictos, registros por persona o el motivo del rechazo) calculada sin guardar nada; solo se importa al confirmar. Cada archivo se importa por separado, se informa cuántos registros aportó cada persona y la web muestra la tabla **Registros por persona**. Reimportar un archivo es seguro; un archivo de otra reunión se rechaza sin afectar a los demás.
 9. En **Resolver conflictos**, compara los registros duplicados (hora, método, dispositivo y quién registró), elige cuál se conserva y escribe el motivo. El otro queda rechazado y ambos permanecen en el historial.
 
 ### Formatos y límites
@@ -671,6 +764,7 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado (requiere PIN definido); solo el administrador de la reunión o un superusuario. |
 | `GET /codes/{code_id}/qr/` | Descargar el QR PNG de un código vigente. |
 | `POST /attendance/import/` | Importar un archivo de resultados offline de reuniones propias (administrador o superusuario); `by_operator` indica cuántos registros aportó cada persona. |
+| `POST /attendance/import/preview/` | Simular la importación de hasta 20 archivos (campo multipart `file` repetido) sin guardar nada: por archivo y en total, registros nuevos, duplicados, conflictos, registros por persona o el error; mismos permisos que la importación. |
 | `GET /attendance/report/{meeting_id}/` | Consultar totales de la reunión. |
 | `GET /meetings/{meeting_id}/conflicts/` | Listar conflictos pendientes de una reunión propia (administrador o superusuario). |
 | `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión o un superusuario. |
@@ -686,8 +780,8 @@ python manage.py test attendance api
 
 Las pruebas cubren asignación, permisos, vistas web y sus restricciones de acceso y método, llamadas, consentimiento, códigos, paquetes firmados con PIN, importación combinada de varios archivos, registros por persona, estados de WhatsApp, conflictos, JWT, WebSocket y auditoría. Con SQLite se omiten las pruebas que necesitan bloqueo de filas; usa PostgreSQL mediante Compose para ejecutarlas. Los eventos en tiempo real se guardan en una tabla persistente y se publican por WebSocket (Django Channels + Redis) con SSE como alternativa.
 
-Validación realizada: construcción y arranque de Compose con servicios saludables, migraciones aplicadas sin cambios pendientes, esquema OpenAPI válido y **165 pruebas aprobadas en PostgreSQL (2 omitidas)**:
+Validación realizada: construcción y arranque de Compose con servicios saludables, migraciones aplicadas sin cambios pendientes, esquema OpenAPI válido y **171 pruebas aprobadas en PostgreSQL con Redis y Celery reales (2 omitidas)**:
 
 ```powershell
-docker compose -f compose.yaml -f compose.local-https.yaml exec web python manage.py test --noinput
+docker compose -f compose.yaml -f compose.local-https.yaml exec -e EDUMEETING_TEST_LIVE_SERVICES=1 web python manage.py test --noinput
 ```
