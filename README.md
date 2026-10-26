@@ -168,6 +168,20 @@ Comprueban la entrega de eventos mediante Redis y generan un paquete firmado con
 
 El workflow [Server tests](./.github/workflows/server-tests.yml) se ejecuta en cada cambio de `edumeeting-server` (push a `main`, pull requests y manualmente). Levanta PostgreSQL 17 y Redis 7 como servicios, instala Python 3.12 y ejecuta `check`, `makemigrations --check` y **todas** las pruebas con `EDUMEETING_TEST_LIVE_SERVICES=1`, incluidas las de concurrencia, Redis y el worker Celery temporal. No necesita secretos.
 
+### Actualización de dependencias (Dependabot)
+
+[`.github/dependabot.yml`](./.github/dependabot.yml) revisa cada lunes (zona `America/Bogota`, UTC-5; cámbiala en el archivo si hace falta) y abre pull requests hacia `main` para:
+
+| Ecosistema | Qué revisa | Agrupación |
+|---|---|---|
+| `pip` | `edumeeting-server/requirements.txt` | Versiones menores y parches en un solo PR; las mayores van por separado. |
+| `gradle` | `edumeeting-llamadas` y `edumeeting-asistencia`, incluida la librería compartida `edumeeting-ui` | Igual que pip. |
+| `docker` | Imágenes base de `edumeeting-server/Dockerfile` y `docker/android/Dockerfile` | Un PR por imagen. |
+| `docker-compose` | Imágenes de `compose*.yaml` (PostgreSQL, Redis, Caddy) | Un PR por imagen. |
+| `github-actions` | Acciones de los workflows | Todas en un solo PR. |
+
+Los workflows de CI se ejecutan sobre cada PR, así que revisa que pasen antes de fusionarlo. Los saltos mayores (por ejemplo, Django 5.2 → 6, o PostgreSQL 17 → 18, que requiere migrar los datos) llegan en PR propios y conviene probarlos localmente. Para activarlo, en GitHub habilita **Settings → Code security → Dependabot alerts / security updates**; las actualizaciones de versión se activan solas al estar el archivo en la rama por defecto.
+
 ### Salud y monitorización
 
 `GET /health/` (sin sesión) comprueba la base de datos y Redis; `GET /health/?full=1` añade un `ping` a los workers Celery. Responde `200` con `{"status": "ok", "checks": {...}}` y el tiempo de cada comprobación, o `503` si algo falla. Nunca incluye mensajes de error ni datos internos: la causa se registra en el log `edumeeting.health` del contenedor web. No se cachea y queda exenta de la redirección HTTPS para que la usen los healthchecks internos.

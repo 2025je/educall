@@ -1,0 +1,63 @@
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /edumeeting-server
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Bogota
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(server)"
+    groups:
+      python-menores:
+        update-types: [minor, patch]
+
+  # Cada app incluye ../edumeeting-ui, así que la librería compartida también se revisa.
+  - package-ecosystem: gradle
+    directories:
+      - /edumeeting-llamadas
+      - /edumeeting-asistencia
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Bogota
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(android)"
+    groups:
+      android-menores:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /edumeeting-server
+      - /docker/android
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Bogota
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Bogota
+    commit-message:
+      prefix: "deps(compose)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: America/Bogota
+    commit-message:
+      prefix: "deps(ci)"
+    groups:
+      acciones:
+        patterns: ["*"]
