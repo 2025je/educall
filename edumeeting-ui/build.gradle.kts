@@ -28,7 +28,7 @@ kotlin { jvmToolchain(17) }
 roborazzi { outputDir.set(file("src/test/screenshots")) }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2025.03.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     api(composeBom)
     api("androidx.compose.material3:material3")
     api("androidx.compose.material:material-icons-core")
