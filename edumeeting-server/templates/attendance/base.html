@@ -6,6 +6,7 @@
   <title>{% block title %}EduMeeting{% endblock %} · EduMeeting Server</title>
   <link rel="stylesheet" href="{% static 'attendance/app.css' %}">
   <script src="{% static 'attendance/theme.js' %}"></script>
+  <script src="{% static 'attendance/uppercase_inputs.js' %}" defer></script>
   {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -22,6 +23,7 @@
     <nav class="md-tabs" aria-label="Secciones">
       <a class="md-tabs__link{% block tab_home %}{% endblock %}" href="{% url 'operator' %}">Inicio</a>
       {% if can_create %}<a class="md-tabs__link{% block tab_meetings %}{% endblock %}" href="{% url 'meeting-management' %}">Reuniones</a>{% endif %}
+      {% if user.is_superuser %}<a class="md-tabs__link{% block tab_users %}{% endblock %}" href="{% url 'user-list' %}">Usuarios</a>{% endif %}
     </nav>
     {% endif %}
     <span class="md-header__spacer"></span>
@@ -64,6 +66,8 @@
             <li><a class="md-nav__link{% block nav_home %}{% endblock %}" href="{% url 'operator' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>Inicio</a>{% block nav_home_children %}{% endblock %}</li>
             {% if can_create %}<li><a class="md-nav__link{% block nav_meetings %}{% endblock %}" href="{% url 'meeting-management' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Gestionar reuniones</a></li>{% endif %}
             {% if user.is_superuser %}
+            <li><a class="md-nav__link" href="{% url 'api-docs' %}">Documentación de API</a></li>
+            <li><a class="md-nav__link{% block nav_users %}{% endblock %}" href="{% url 'user-list' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 14 0v2M17 3a4 4 0 0 1 0 8M22 21v-2a7 7 0 0 0-4-6"/></svg>Usuarios y grupos</a></li>
             <li><a class="md-nav__link" href="{% url 'session-context' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>API REST (navegable)</a></li>
             <li><a class="md-nav__link" href="/admin/"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Administración Django</a></li>
             {% endif %}

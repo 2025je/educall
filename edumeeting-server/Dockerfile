@@ -7,7 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
-RUN useradd --create-home --uid 10001 edumeeting
+RUN useradd --create-home --uid 10001 edumeeting \
+    && mkdir /app/staticfiles \
+    && chown edumeeting:edumeeting /app/staticfiles
 COPY --chown=edumeeting:edumeeting . .
 USER edumeeting
 EXPOSE 8000

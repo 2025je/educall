@@ -1,0 +1,48 @@
+{% extends "attendance/base.html" %}
+{% load static attendance_labels %}
+{% block title %}Usuarios y grupos{% endblock %}
+{% block head %}<script src="{% static 'attendance/user_form.js' %}" defer></script>{% endblock %}
+{% block nav_users %} md-nav__link--active{% endblock %}
+{% block tab_users %} md-tabs__link--active{% endblock %}
+{% block breadcrumbs %} <span>›</span> <a href="{% url 'user-list' %}">Usuarios y grupos</a>{% if editing_account %} <span>›</span> <span>Editar</span>{% endif %}{% endblock %}
+{% block toc %}<li><a class="md-nav__link" href="#datos-usuario">{% if editing_account %}Editar usuario{% else %}Crear usuario{% endif %}</a></li><li><a class="md-nav__link" href="#usuarios">Usuarios registrados</a></li>{% endblock %}
+{% block content %}
+<h1>Usuarios y grupos</h1>
+<p>Gestión exclusiva del superusuario. Se muestran las demás cuentas y sus grupos globales, no sus asignaciones a reuniones. Tu propia cuenta no se modifica desde esta vista.</p>
+<section class="md-section">
+  <h2 id="datos-usuario">{% if editing_account %}Editar {{ editing_account.get_username }}{% else %}Crear usuario{% endif %}</h2>
+  <p>Asigna uno o varios grupos. Para Operador de llamadas se requieren iniciales únicas de dos letras. Desactivar una cuenta impide su acceso sin borrar sus datos ni su historial.</p>
+  <form method="post" class="md-form" action="{% if editing_account %}{% url 'user-edit' editing_account.pk %}{% else %}{% url 'user-list' %}{% endif %}">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <div class="actions">
+      <button type="submit" class="md-button">{% if editing_account %}Guardar cambios{% else %}Crear usuario{% endif %}</button>
+      {% if editing_account %}<a class="md-button secondary" href="{% url 'user-list' %}">Cancelar / Crear otro usuario</a>{% endif %}
+    </div>
+  </form>
+</section>
+<section class="md-section">
+  <h2 id="usuarios">Usuarios registrados</h2>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th scope="col">Usuario</th><th scope="col">Nombre</th><th scope="col">Estado</th><th scope="col">Grupos</th><th scope="col">Acciones</th></tr></thead>
+    <tbody>
+    {% for account in listed_users %}
+    <tr>
+      <td><strong>{{ account.get_username }}</strong>{% if account.is_superuser %} <span class="md-chip">Superusuario</span>{% endif %}</td>
+      <td>{{ account.get_full_name|default:"Sin nombre" }}</td>
+      <td>{% if account.is_active %}<span class="md-chip md-chip--ok">Activo</span>{% else %}<span class="md-chip md-chip--muted">Inactivo</span>{% endif %}</td>
+      <td>{% for group in account.groups.all %}<span class="md-chip">{{ group.name|role_label }}</span>{% empty %}<span class="md-chip md-chip--muted">Sin grupos</span>{% endfor %}</td>
+      <td><div class="actions">
+        <a class="md-button md-button--small" href="{% url 'user-edit' account.pk %}#datos-usuario">Editar</a>
+        <form method="post" action="{% url 'user-toggle' account.pk %}">
+          {% csrf_token %}
+          <input type="hidden" name="is_active" value="{% if account.is_active %}0{% else %}1{% endif %}">
+          <button type="submit" class="md-button md-button--small secondary">{% if account.is_active %}Desactivar{% else %}Activar{% endif %}</button>
+        </form>
+      </div></td>
+    </tr>
+    {% empty %}<tr><td colspan="5">No hay otros usuarios registrados.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

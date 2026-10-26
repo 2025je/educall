@@ -4,6 +4,14 @@ from django.db.models import Q
 from .models import Meeting
 
 
+def role_label(name):
+    return {
+        "ADMINISTRADOR": "Administrador de reuniones",
+        "REGISTRAR": "Registrador de participantes",
+        "OPERADOR": "Operador de llamadas",
+    }.get(name, name)
+
+
 def has_role(user, role):
     return user.is_active and (user.is_superuser or user.groups.filter(name=role).exists())
 

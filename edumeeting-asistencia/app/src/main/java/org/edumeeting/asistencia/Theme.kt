@@ -1,6 +1,10 @@
 package org.edumeeting.asistencia
 
 import android.content.Context
+import androidx.datastore.preferences.SharedPreferencesMigration
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
@@ -10,6 +14,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +26,17 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import java.io.IOException
+import kotlinx.coroutines.launch
+
+private val Context.appearancePreferences by preferencesDataStore(
+    name = "appearance",
+    produceMigrations = { context -> listOf(SharedPreferencesMigration(context, "appearance")) },
+)
+private val themeKey = stringPreferencesKey("theme")
 
 val BrandPrimary = Color(0xFF4051B5)
 private val AccentLight = Color(0xFF526CFE)
@@ -113,22 +130,51 @@ val ColorScheme.accent: Color get() = primary
 @Composable
 fun EduMeetingTheme(content: @Composable (ThemeState) -> Unit) {
     val context = LocalContext.current
-    val preferences = remember { context.getSharedPreferences("appearance", Context.MODE_PRIVATE) }
-    var choice by remember { mutableStateOf(preferences.getString("theme", "system")) }
+    val preferences = remember { context.applicationContext.appearancePreferences }
+    val scope = rememberCoroutineScope()
+    var choice by remember { mutableStateOf("system") }
+    var loaded by remember { mutableStateOf(false) }
+    var preferenceError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(preferences) {
+        try {
+            preferences.data.collect {
+                choice = it[themeKey] ?: "system"
+                loaded = true
+            }
+        } catch (error: IOException) {
+            preferenceError = "No se pudo leer el tema: ${error.message}"
+            loaded = true
+        }
+    }
     val dark = when (choice) {
         "dark" -> true
         "light" -> false
         else -> isSystemInDarkTheme()
     }
     fun save(value: String) {
-        preferences.edit().putString("theme", value).apply()
-        choice = value
+        if (!loaded) return
+        scope.launch {
+            try {
+                preferences.edit { it[themeKey] = value }
+                choice = value
+            } catch (error: IOException) {
+                preferenceError = "No se pudo guardar el tema: ${error.message}"
+            }
+        }
     }
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         typography = ZensicalTypography,
         shapes = ZensicalShapes,
     ) {
+        preferenceError?.let { message ->
+            AlertDialog(
+                onDismissRequest = { preferenceError = null },
+                title = { Text("Preferencias") },
+                text = { Text(message) },
+                confirmButton = { TextButton(onClick = { preferenceError = null }) { Text("Aceptar") } },
+            )
+        }
         content(
             ThemeState(
                 dark = dark,

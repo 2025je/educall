@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from attendance.models import AttendanceRecord, CallAttempt, CallTask, Meeting, MessageLog, Participant
 
@@ -48,7 +49,7 @@ class MeetingSerializer(serializers.ModelSerializer):
         fields = ("id", "number", "name", "starts_at", "starts_at_local", "location", "active")
         read_only_fields = ("active",)
 
-    def get_starts_at_local(self, meeting):
+    def get_starts_at_local(self, meeting) -> str:
         return timezone.localtime(meeting.starts_at).strftime("%Y-%m-%d %H:%M")
 
     def validate(self, attrs):
@@ -133,6 +134,7 @@ class ResolveConflictSerializer(serializers.Serializer):
     resolution = serializers.CharField(label="Resolución")
 
 
+@extend_schema_field({"type": "object", "nullable": True, "properties": {"id": {"type": "string"}, "name": {"type": "string"}}})
 class OriginMeetingField(serializers.Field):
     def __init__(self, **kwargs):
         super().__init__(source="*", read_only=True, **kwargs)
@@ -170,9 +172,11 @@ class CallTaskSerializer(serializers.ModelSerializer):
         model = CallTask
         fields = ("id", "participant", "meeting", "lease_expires_at", "history")
 
+    @extend_schema_field({"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}})
     def get_meeting(self, task):
         return {"id": str(task.meeting_id), "name": task.meeting.name}
 
+    @extend_schema_field(CallAttemptSerializer(many=True))
     def get_history(self, task):
         attempts = task.attempts.select_related("operator").order_by("-created_at")[:10]
         return CallAttemptSerializer(attempts, many=True).data
@@ -187,7 +191,7 @@ class ParticipantSearchSerializer(serializers.ModelSerializer):
         model = Participant
         fields = ("id", "name", "phone", "origin_meeting", "do_not_contact", "contact_authorized", "invitation_status")
 
-    def get_origin_meeting(self, participant):
+    def get_origin_meeting(self, participant) -> str | None:
         return str(participant.origin_meeting_id) if participant.origin_meeting_id else None
 
 
@@ -201,14 +205,16 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         model = AttendanceRecord
         fields = ("id", "name", "origin_meeting", "effective_meeting", "recorded_at", "method", "status")
 
-    def get_id(self, record):
+    def get_id(self, record) -> str:
         return str(record.participant_id)
 
-    def get_name(self, record):
+    def get_name(self, record) -> str:
         return record.participant_name_snapshot or record.participant.full_name
 
+    @extend_schema_field({"type": "object", "nullable": True, "properties": {"id": {"type": "string"}, "name": {"type": "string"}}})
     def get_origin_meeting(self, record):
         return str(record.origin_meeting_id) if record.origin_meeting_id else None
 
+    @extend_schema_field({"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}}})
     def get_effective_meeting(self, record):
         return str(record.effective_meeting_id)

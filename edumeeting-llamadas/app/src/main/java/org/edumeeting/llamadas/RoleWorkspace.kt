@@ -88,7 +88,7 @@ internal fun RoleWorkspace(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Asignar cuentas", style = MaterialTheme.typography.titleLarge)
                         Text("Selecciona cuentas existentes. Desmarcar quita la asignación.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        for ((field, label) in listOf("registrars" to "Registradores", "operators" to "Operadores")) {
+                        for ((field, label) in listOf("registrars" to "Registradores de participantes", "operators" to "Operadores de llamadas")) {
                             Text(label, style = MaterialTheme.typography.titleMedium)
                             val choices = data.getJSONArray(field)
                             if (choices.length() == 0) Text("No hay cuentas activas de este grupo.")

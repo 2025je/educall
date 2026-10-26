@@ -5,7 +5,7 @@
 {% include "attendance/workspace_cards.html" %}
 <section class="md-section">
   <div class="section-heading"><h2 id="cola">Cola de llamadas</h2><button id="next-call" class="md-button">Siguiente llamada</button></div>
-  <p id="call-message" role="status">Solicita una llamada cuando estés listo.</p>
+  <p id="call-message" data-meeting-id="{{ active_meeting.pk }}" role="status">Solicita una llamada cuando estés listo.</p>
   <article id="active-call" class="md-card" hidden>
     <h3 id="participant-name"></h3>
     <p id="participant-details"></p>

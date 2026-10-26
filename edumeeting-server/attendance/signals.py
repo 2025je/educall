@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.db.models.signals import post_migrate
 from django.dispatch import receiver
+from auditlog.context import disable_auditlog
 
 
 @receiver(post_migrate)
@@ -25,6 +26,7 @@ def create_default_roles(sender, **kwargs):
             )
         ).filter(content_type__app_label="attendance"),
     }
-    for name, permissions in role_permissions.items():
-        group, _ = Group.objects.get_or_create(name=name)
-        group.permissions.set(permissions)
+    with disable_auditlog():
+        for name, permissions in role_permissions.items():
+            group, _ = Group.objects.get_or_create(name=name)
+            group.permissions.set(permissions)

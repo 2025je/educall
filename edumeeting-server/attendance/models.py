@@ -420,3 +420,21 @@ class RealtimeEvent(models.Model):
     topic = models.CharField(max_length=80)
     payload = models.JSONField(default=dict)
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+
+class PackageExportJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pendiente"
+        RUNNING = "running", "En proceso"
+        SUCCEEDED = "succeeded", "Completada"
+        FAILED = "failed", "Fallida"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    meeting = models.ForeignKey(Meeting, on_delete=models.PROTECT)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    package = models.ForeignKey(AttendancePackage, null=True, on_delete=models.SET_NULL)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    contents = models.BinaryField(null=True)
+    error = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()

@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 
@@ -14,6 +15,7 @@ if not DEBUG and SECRET_KEY == "local-development-only-change-me":
     raise ImproperlyConfigured("Configura DJANGO_SECRET_KEY antes del despliegue.")
 
 INSTALLED_APPS = [
+    "daphne",
     "config.apps.EduMeetingAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -21,6 +23,12 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
+    "django_filters",
+    "corsheaders",
+    "auditlog",
     "attendance.apps.AttendanceConfig",
     "api.apps.ApiConfig",
 ]
@@ -28,9 +36,12 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "api.middleware.ApiAuditMiddleware",
+    "auditlog.middleware.AuditlogMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -110,7 +121,13 @@ ATTENDANCE_SIGNING_PRIVATE_KEY = os.environ.get("ATTENDANCE_SIGNING_PRIVATE_KEY"
 ATTENDANCE_SIGNING_PUBLIC_KEY = os.environ.get("ATTENDANCE_SIGNING_PUBLIC_KEY", "")
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework.authentication.SessionAuthentication",),
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ),
+    "DEFAULT_SCHEMA_CLASS": "api.schema.EduMeetingSchema",
+    "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
+    "DEFAULT_THROTTLE_RATES": {"token": "10/min"},
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_PARSER_CLASSES": ("rest_framework.parsers.JSONParser",),
     "DEFAULT_RENDERER_CLASSES": (
@@ -121,3 +138,48 @@ REST_FRAMEWORK = {
     "DEFAULT_CONTENT_NEGOTIATION_CLASS": "api.negotiation.SuperuserBrowsableNegotiation",
     "EXCEPTION_HANDLER": "api.exceptions.exception_handler",
 }
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "CHECK_REVOKE_TOKEN": True,
+}
+SPECTACULAR_SETTINGS = {
+    "TITLE": "EduMeeting API",
+    "DESCRIPTION": "API de reuniones, llamadas y asistencia. Sesiones con CSRF o Bearer JWT.",
+    "VERSION": "1.0.0",
+    "SERVE_PERMISSIONS": ["api.permissions.IsSuperuser"],
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    "COMPONENT_SPLIT_REQUEST": True,
+}
+CORS_ALLOWED_ORIGINS = [
+    origin.strip() for origin in os.environ.get("DJANGO_CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
+]
+CORS_ALLOW_CREDENTIALS = False
+CORS_URLS_REGEX = r"^/api/.*$"
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_HEADERS = (*default_headers, "x-edumeeting-meeting")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+CHANNEL_LAYERS = {"default": {
+    "BACKEND": "channels_redis.core.RedisChannelLayer",
+    "CONFIG": {"hosts": [REDIS_URL], "capacity": 100, "expiry": 60},
+}}
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_TASK_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_TIMEOUT = 3
+CELERY_TASK_PUBLISH_RETRY = False
+CELERY_TASK_TIME_LIMIT = 900
+CELERY_TASK_SOFT_TIME_LIMIT = 840
+CELERY_BEAT_SCHEDULE = {
+    "purge-expired-exports": {"task": "attendance.tasks.purge_expired_exports", "schedule": 3600},
+}
+AUDITLOG_DISABLE_REMOTE_ADDR = True

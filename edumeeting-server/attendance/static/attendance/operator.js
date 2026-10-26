@@ -286,7 +286,7 @@
     } catch (error) { showToast(error.message); }
   }));
 
-  try {
+  function startEventStream() {
     const stream = new EventSource("/api/v1/attendance/stream/");
     stream.addEventListener("calls", () => {
       document.getElementById("call-message").textContent = "La cola tuvo cambios recientes. El servidor confirma cada asignación.";
@@ -295,5 +295,36 @@
     stream.onerror = () => {
       document.getElementById("call-message").textContent = "Actualización en tiempo real desconectada; las acciones siguen consultando al servidor.";
     };
-  } catch { /* The API actions remain available without event streaming. */ }
+    window.addEventListener("pagehide", () => stream.close(), { once: true });
+  }
+  const meetingId = document.getElementById("call-message").dataset.meetingId;
+  if (meetingId && "WebSocket" in window) {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${location.host}/ws/attendance/${meetingId}/`);
+    const heartbeat = window.setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
+    }, 20000);
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (message.topic === "calls") {
+        document.getElementById("call-message").textContent = "La cola tuvo cambios recientes. El servidor confirma cada asignación.";
+      } else if (message.topic === "attendance") {
+        showToast("Se actualizaron los registros de asistencia.");
+      } else if (message.error) {
+        showToast(message.error);
+      }
+    });
+    socket.addEventListener("close", () => {
+      window.clearInterval(heartbeat);
+      if (!leavingPage) startEventStream();
+    }, { once: true });
+    let leavingPage = false;
+    window.addEventListener("pagehide", () => {
+      leavingPage = true;
+      window.clearInterval(heartbeat);
+      socket.close();
+    }, { once: true });
+  } else {
+    startEventStream();
+  }
 })();

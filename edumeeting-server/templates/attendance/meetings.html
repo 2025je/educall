@@ -1,7 +1,7 @@
 {% extends "attendance/base.html" %}
 {% load static %}
 {% block title %}Gestionar reuniones{% endblock %}
-{% block head %}<script src="{% static 'attendance/meeting_form.js' %}" defer></script>{% endblock %}
+{% block head %}<script src="{% static 'attendance/meeting_form.js' %}" defer></script>{% if user.is_superuser %}<script src="{% static 'attendance/export_packages.js' %}" defer></script>{% endif %}{% endblock %}
 {% block nav_meetings %} md-nav__link--active{% endblock %}
 {% block tab_meetings %} md-tabs__link--active{% endblock %}
 {% block breadcrumbs %} <span>›</span> <span>Gestionar reuniones</span>{% endblock %}
@@ -36,6 +36,10 @@
       <td><div class="actions">
         <a class="md-button md-button--small" href="{% url 'meeting-edit' meeting.pk %}">Editar</a>
         <form method="post" action="{% url 'meeting-toggle' meeting.pk %}">{% csrf_token %}<button class="md-button md-button--small secondary">{% if meeting.active %}Desactivar{% else %}Activar{% endif %}</button></form>
+        {% if user.is_superuser %}
+        <button type="button" class="md-button md-button--small secondary" data-export-url="{% url 'package-export-create' meeting.pk %}">Exportar asistencia</button>
+        <span data-export-status role="status" aria-live="polite"></span>
+        {% endif %}
       </div></td>
     </tr>
     {% empty %}<tr><td colspan="6">No hay reuniones todavía. Crea la primera con el formulario.</td></tr>{% endfor %}

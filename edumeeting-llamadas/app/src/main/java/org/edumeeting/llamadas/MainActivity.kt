@@ -1,6 +1,5 @@
 package org.edumeeting.llamadas
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -70,6 +69,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.IOException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -149,15 +149,36 @@ private fun DialScreen() {
     var expandedPersonId by remember { mutableStateOf<String?>(null) }
     val roleWorkspaceState = remember(activeMeetingId, api) { RoleWorkspaceState() }
     var editingMeetingId by remember { mutableStateOf<String?>(null) }
-    val preferences = remember { context.getSharedPreferences("edumeeting_llamadas_ui", Context.MODE_PRIVATE) }
+    val preferences = remember { DialPreferences(context) }
+    var preferencesLoaded by remember { mutableStateOf(false) }
     val systemDark = isSystemInDarkTheme()
-    var darkMode by remember { mutableStateOf(preferences.getBoolean("dark_mode", systemDark)) }
+    var darkMode by remember { mutableStateOf(systemDark) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val snackbarHostState = remember { SnackbarHostState() }
 
+    LaunchedEffect(preferences) {
+        try {
+            val settings = preferences.load()
+            darkMode = settings.darkMode ?: systemDark
+            serverUrl = settings.serverUrl
+        } catch (error: IOException) {
+            notice = "No se pudieron leer las preferencias: ${error.message}"
+            snackbarHostState.showNotice(notice, AdmonitionKind.Danger)
+        } finally {
+            preferencesLoaded = true
+        }
+    }
+
     fun setDarkMode(enabled: Boolean) {
-        darkMode = enabled
-        preferences.edit().putBoolean("dark_mode", enabled).apply()
+        if (!preferencesLoaded) return
+        scope.launch {
+            try {
+                preferences.setDarkMode(enabled)
+                darkMode = enabled
+            } catch (error: IOException) {
+                snackbarHostState.showNotice("No se pudo guardar el tema: ${error.message}", AdmonitionKind.Danger)
+            }
+        }
     }
 
     fun clearMeetingForm() {
@@ -453,6 +474,7 @@ private fun DialScreen() {
                                     Text("Iniciar sesión", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                                     OutlinedTextField(
                                         value = serverUrl, onValueChange = { serverUrl = it }, label = { Text("URL HTTPS del servidor") },
+                                        enabled = preferencesLoaded && !busy,
                                         leadingIcon = { Icon(Icons.Default.Lock, null) }, singleLine = true,
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth(),
                                     )
@@ -470,10 +492,17 @@ private fun DialScreen() {
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth(),
                                     )
                                     Button(
-                                        enabled = !busy && username.isNotBlank() && password.isNotBlank(),
+                                        enabled = preferencesLoaded && !busy && username.isNotBlank() && password.isNotBlank(),
                                         onClick = {
                                             runRequest {
                                                 val sessionApi = withContext(Dispatchers.IO) { DjangoSessionApi(serverUrl).also { it.login(username, password) } }
+                                                try {
+                                                    preferences.setServerUrl(serverUrl)
+                                                } catch (error: IOException) {
+                                                    scope.launch {
+                                                        snackbarHostState.showNotice("No se pudo guardar la URL: ${error.message}", AdmonitionKind.Danger)
+                                                    }
+                                                }
                                                 api = sessionApi
                                                 password = ""
                                                 passwordVisible = false
@@ -500,9 +529,9 @@ private fun DialScreen() {
                                 WorkspaceHome(
                                     username = signedInUsername, meeting = activeMeetingName,
                                     roles = buildList {
-                                        if (canCreateMeetings || canManage) add("Administrador")
-                                        if (canRegister) add("Registrador")
-                                        if (canOperate) add("Operador")
+                                        if (canCreateMeetings || canManage) add("Administrador de reuniones")
+                                        if (canRegister) add("Registrador de participantes")
+                                        if (canOperate) add("Operador de llamadas")
                                         if (isEmpty()) add("Sin rol en la reunión activa")
                                     },
                                     destinations = destinations, navigate = { destination = it },

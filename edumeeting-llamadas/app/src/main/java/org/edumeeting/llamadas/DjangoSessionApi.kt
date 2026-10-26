@@ -1,130 +1,151 @@
 package org.edumeeting.llamadas
 
-import android.net.Uri
 import java.net.CookieManager
 import java.net.CookiePolicy
-import java.net.HttpURLConnection
-import java.net.URI
-import java.net.URL
-import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.JavaNetCookieJar
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.ResponseBody
+import org.json.JSONException
 import org.json.JSONObject
+import retrofit2.Call
+import retrofit2.Retrofit
+import retrofit2.http.Body
+import retrofit2.http.FieldMap
+import retrofit2.http.FormUrlEncoded
+import retrofit2.http.GET
+import retrofit2.http.HeaderMap
+import retrofit2.http.POST
+import retrofit2.http.Url
 
-class DjangoSessionApi(baseUrl: String) {
+internal interface DjangoSessionService {
+    @GET
+    fun get(@Url url: String, @HeaderMap headers: Map<String, String>): Call<ResponseBody>
+
+    @POST
+    fun post(
+        @Url url: String,
+        @HeaderMap headers: Map<String, String>,
+        @Body body: RequestBody,
+    ): Call<ResponseBody>
+
+    @FormUrlEncoded
+    @POST
+    fun login(
+        @Url url: String,
+        @HeaderMap headers: Map<String, String>,
+        @FieldMap fields: Map<String, String>,
+    ): Call<ResponseBody>
+}
+
+class DjangoSessionApi internal constructor(baseUrl: String, clientBuilder: OkHttpClient.Builder) {
+    constructor(baseUrl: String) : this(baseUrl, OkHttpClient.Builder())
+
     var meetingId: String? = null
-    private val baseUrl = baseUrl.trimEnd('/')
-    private val cookieManager: CookieManager
+    private val baseUrl = baseUrl.trimEnd('/').toHttpUrlOrNull()
+        ?: throw IllegalArgumentException("Escribe una URL válida, por ejemplo https://servidor.edumeeting.org")
+    private val cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
+    private val cookieJar = JavaNetCookieJar(cookieManager)
+    private val service: DjangoSessionService
 
     init {
-        val uri = Uri.parse(this.baseUrl)
-        require(uri.host != null && uri.scheme in setOf("https", "http")) {
-            "Escribe una URL válida, por ejemplo https://servidor.edumeeting.org"
-        }
-        require(uri.scheme == "https") {
+        require(this.baseUrl.isHttps) {
             "Por seguridad, EduMeeting Llamadas solo permite conectarse al servidor por HTTPS."
         }
-        cookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER)
-        java.net.CookieHandler.setDefault(cookieManager)
+        val client = clientBuilder
+            .cookieJar(cookieJar)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+        service = Retrofit.Builder()
+            .baseUrl("${this.baseUrl.toString().trimEnd('/')}/")
+            .client(client)
+            .build()
+            .create(DjangoSessionService::class.java)
+    }
+
+    private fun url(path: String): String {
+        require(path.startsWith("/") && !path.startsWith("//")) { "La ruta de la API no es válida." }
+        return "${baseUrl.toString().trimEnd('/')}$path"
+    }
+
+    private fun headers(): MutableMap<String, String> = mutableMapOf<String, String>().apply {
+        meetingId?.let { put("X-EduMeeting-Meeting", it) }
     }
 
     fun login(username: String, password: String) {
-        val page = connection("/accounts/login/").let { connection ->
-            try {
-                connection.requestMethod = "GET"
-                val status = connection.responseCode
-                if (status !in 200..299) throw IllegalStateException("No se pudo abrir el inicio de sesión (HTTP $status).")
-                connection.inputStream.bufferedReader().use { it.readText() }
-            } finally {
-                connection.disconnect()
-            }
+        val loginUrl = url("/accounts/login/")
+        val pageResponse = service.get(loginUrl, headers()).execute()
+        val page = (pageResponse.body() ?: pageResponse.errorBody())?.use { it.string() }.orEmpty()
+        check(pageResponse.isSuccessful) {
+            "No se pudo abrir el inicio de sesión (HTTP ${pageResponse.code()})."
         }
         val token = Regex("""name=["']csrfmiddlewaretoken["']\s+value=["']([^"']+)["']""")
             .find(page)?.groupValues?.get(1)
             ?: throw IllegalStateException("El servidor no entregó el token CSRF del inicio de sesión.")
-        val fields = listOf(
-            "csrfmiddlewaretoken" to token,
-            "username" to username,
-            "password" to password,
-        ).joinToString("&") { (key, value) ->
-            "${encode(key)}=${encode(value)}"
-        }
-        val connection = connection("/accounts/login/")
-        try {
-            connection.requestMethod = "POST"
-            connection.doOutput = true
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-            connection.setRequestProperty("Referer", "$baseUrl/accounts/login/")
-            connection.setRequestProperty("X-CSRFToken", token)
-            connection.outputStream.use { it.write(fields.toByteArray(Charsets.UTF_8)) }
-            val status = connection.responseCode
-            if (status !in 300..399) {
-                throw IllegalStateException(
-                    if (status == 200) "Credenciales incorrectas o cuenta no autorizada."
-                    else "Falló el inicio de sesión (HTTP $status)."
-                )
-            }
-        } finally {
-            connection.disconnect()
+        val response = service.login(
+            loginUrl,
+            headers().apply {
+                put("Referer", loginUrl)
+                put("X-CSRFToken", token)
+            },
+            mapOf("csrfmiddlewaretoken" to token, "username" to username, "password" to password),
+        ).execute()
+        (response.body() ?: response.errorBody())?.close()
+        check(response.code() in 300..399) {
+            if (response.code() == 200) "Credenciales incorrectas o cuenta no autorizada."
+            else "Falló el inicio de sesión (HTTP ${response.code()})."
         }
     }
 
-    fun get(path: String): JSONObject = request(path, "GET", null)
+    fun get(path: String): JSONObject = request(path, null)
 
-    fun post(path: String, body: JSONObject): JSONObject = request(path, "POST", body.toString())
+    fun post(path: String, body: JSONObject): JSONObject = request(path, body)
 
     fun logout() {
         post("/api/v1/mobile/logout/", JSONObject())
         cookieManager.cookieStore.removeAll()
+        meetingId = null
     }
 
-    private fun request(path: String, method: String, body: String?): JSONObject {
-        val csrfToken = if (method == "POST") {
-            cookieManager.cookieStore.get(URI(baseUrl))
-                .firstOrNull { it.name == "csrftoken" && !it.hasExpired() }?.value
-                ?: throw IllegalStateException("No hay un token CSRF vigente. Inicia sesión de nuevo.")
+    private fun request(path: String, body: JSONObject?): JSONObject {
+        val requestUrl = url(path)
+        val headers = headers().apply { put("Accept", "application/json") }
+        val call = if (body == null) {
+            service.get(requestUrl, headers)
         } else {
-            null
+            val csrfToken = cookieJar.loadForRequest(baseUrl)
+                .firstOrNull { it.name == "csrftoken" }?.value
+                ?: throw IllegalStateException("No hay un token CSRF vigente. Inicia sesión de nuevo.")
+            headers["X-CSRFToken"] = csrfToken
+            headers["Referer"] = "${baseUrl.toString().trimEnd('/')}/"
+            service.post(requestUrl, headers, body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         }
-        val connection = connection(path)
-        try {
-            connection.requestMethod = method
-            connection.instanceFollowRedirects = false
-            connection.setRequestProperty("Accept", "application/json")
-            csrfToken?.let { connection.setRequestProperty("X-CSRFToken", it) }
-            if (body != null) {
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                connection.setRequestProperty("Referer", "$baseUrl/")
-                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val response = call.execute()
+        val text = (response.body() ?: response.errorBody())?.use { it.string() }.orEmpty()
+        if (!response.isSuccessful) {
+            val detail = try {
+                JSONObject(text).optString("error")
+            } catch (_: JSONException) {
+                ""
             }
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            val json = try {
-                JSONObject(response)
-            } catch (_: Exception) {
-                JSONObject()
-            }
-            if (status !in 200..299) {
-                val message = when (status) {
+            throw IllegalStateException(
+                when (response.code()) {
                     302, 401 -> "La sesión venció. Inicia sesión de nuevo."
-                    else -> json.optString("error").ifBlank { "Error del servidor (HTTP $status)." }
-                }
-                throw IllegalStateException(message)
-            }
-            return json
-        } finally {
-            connection.disconnect()
+                    else -> detail.ifBlank { "Error del servidor (HTTP ${response.code()})." }
+                },
+            )
+        }
+        return try {
+            JSONObject(text)
+        } catch (error: JSONException) {
+            throw IllegalStateException("El servidor devolvió una respuesta JSON inválida.", error)
         }
     }
-
-    private fun connection(path: String): HttpURLConnection {
-        val connection = URL("$baseUrl$path").openConnection() as HttpURLConnection
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 20_000
-        meetingId?.let { connection.setRequestProperty("X-EduMeeting-Meeting", it) }
-        return connection
-    }
-
-    private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 }

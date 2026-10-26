@@ -16,6 +16,7 @@ class MaterialLayoutTests(TestCase):
         response = self.client.get(reverse("login"))
         self.assertContains(response, "data-theme-toggle")
         self.assertContains(response, "attendance/theme.js")
+        self.assertContains(response, "attendance/uppercase_inputs.js")
         self.assertNotContains(response, "https://")
         self.assertNotContains(response, "md-sidebar--primary")
 
@@ -39,5 +40,85 @@ class MaterialLayoutTests(TestCase):
     def test_static_theme_assets_exist(self):
         from django.contrib.staticfiles import finders
 
-        for path in ("attendance/app.css", "attendance/theme.js", "attendance/operator.js"):
+        for path in ("attendance/app.css", "attendance/theme.js", "attendance/operator.js", "attendance/uppercase_inputs.js"):
             self.assertTrue(finders.find(path), path)
+
+    def test_admin_loads_uppercase_inputs_without_changing_technical_message_type(self):
+        root = get_user_model().objects.create_superuser("uppercase-root", password=None)
+        self.client.force_login(root)
+        response = self.client.get(reverse("admin:attendance_messagetemplate_add"))
+        self.assertContains(response, "attendance/uppercase_inputs.js")
+        self.assertContains(response, "data-preserve-case")
+        self.assertEqual(response.context["adminform"].form.fields["message_type"].initial, "invitation")
+
+
+class SuperuserUserListTests(TestCase):
+    def setUp(self):
+        self.root = get_user_model().objects.create_superuser("root", password=None)
+        self.url = reverse("user-list")
+
+    def test_anonymous_redirects_to_login(self):
+        response = self.client.get(self.url)
+        self.assertRedirects(response, f"{reverse('login')}?next={self.url}")
+
+    def test_non_superusers_cannot_access_or_see_navigation(self):
+        for role in ("ADMINISTRADOR", "REGISTRAR", "OPERADOR", None):
+            with self.subTest(role=role):
+                user = get_user_model().objects.create_user(role or "staff", is_staff=True)
+                if role:
+                    user.groups.add(Group.objects.get(name=role))
+                self.client.force_login(user)
+                self.assertEqual(self.client.get(self.url).status_code, 403)
+                self.assertNotContains(self.client.get(reverse("operator")), 'href="/users/"')
+
+    def test_lists_other_users_and_all_groups_without_active_meeting(self):
+        user = get_user_model().objects.create_user("alice", first_name="Ana", last_name="Luna")
+        user.groups.add(Group.objects.get(name="REGISTRAR"), Group.objects.get(name="OPERADOR"))
+        inactive = get_user_model().objects.create_user("bob", is_active=False)
+        other_root = get_user_model().objects.create_superuser("other-root", password=None)
+        self.client.force_login(self.root)
+        response = self.client.get(self.url)
+        self.assertEqual(list(response.context["listed_users"]), [user, inactive, other_root])
+        self.assertContains(response, "Ana Luna")
+        self.assertContains(response, "Operador de llamadas")
+        self.assertContains(response, "Registrador de participantes")
+        self.assertContains(response, "Sin grupos")
+        self.assertContains(response, "Inactivo")
+        self.assertContains(response, "Superusuario")
+        self.assertContains(response, "Reunión activa: Sin seleccionar")
+        self.assertContains(response, 'md-nav__link md-nav__link--active" href="/users/"')
+        self.assertContains(response, 'md-tabs__link md-tabs__link--active" href="/users/"')
+        self.assertContains(self.client.get(reverse("operator")), 'href="/users/"', count=2)
+
+    def test_empty_list_excludes_current_superuser(self):
+        self.client.force_login(self.root)
+        response = self.client.get(self.url)
+        self.assertContains(response, "No hay otros usuarios registrados.")
+        self.assertEqual(list(response.context["listed_users"]), [])
+
+    def test_groups_are_sorted_and_prefetched(self):
+        for username in ("alice", "bob", "carol"):
+            user = get_user_model().objects.create_user(username)
+            user.groups.add(Group.objects.get(name="REGISTRAR"), Group.objects.get(name="OPERADOR"))
+        self.client.force_login(self.root)
+        response = self.client.get(self.url)
+        with self.assertNumQueries(0):
+            for user in response.context["listed_users"]:
+                self.assertEqual([group.name for group in user.groups.all()], ["OPERADOR", "REGISTRAR"])
+
+    def test_user_and_group_names_are_escaped(self):
+        user = get_user_model().objects.create_user("<script>user</script>")
+        user.groups.add(Group.objects.create(name="<script>group</script>"))
+        self.client.force_login(self.root)
+        response = self.client.get(self.url)
+        self.assertContains(response, "&lt;script&gt;user&lt;/script&gt;")
+        self.assertContains(response, "&lt;script&gt;group&lt;/script&gt;")
+        self.assertNotContains(response, "<script>user</script>")
+        self.assertNotContains(response, "<script>group</script>")
+
+    def test_invalid_creation_shows_errors(self):
+        self.client.force_login(self.root)
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["form"].errors)
+        self.assertEqual(get_user_model().objects.count(), 1)

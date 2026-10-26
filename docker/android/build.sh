@@ -22,6 +22,10 @@ if [ "$APP_NAME" = "edumeeting-asistencia" ]; then
     set -- "-PattendancePublicKey=$ATTENDANCE_SIGNING_PUBLIC_KEY"
 fi
 
+if [ "$APP_NAME" = "edumeeting-llamadas" ]; then
+    set -- "$@" :app:testDebugUnitTest
+fi
+
 gradle --no-daemon --console=plain --max-workers=2 \
     -Dorg.gradle.java.installations.auto-download=false \
     "$@" \

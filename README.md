@@ -19,7 +19,7 @@ flowchart LR
 
 ## Inicio con Docker Compose
 
-Esta configuración sirve para **desarrollo y pruebas locales**: usa PostgreSQL persistente y el servidor de desarrollo Django con `DEBUG=1`. No es un despliegue de producción ni ofrece HTTPS. Los comandos siguientes se ejecutan en PowerShell, desde la raíz del repositorio.
+Esta configuración sirve para **desarrollo y pruebas locales**: usa PostgreSQL persistente, Redis, Django ASGI con Daphne y `DEBUG=1`, y procesos Celery de tareas y programación. No es un despliegue de producción ni ofrece HTTPS sin el complemento local. Los comandos siguientes se ejecutan en PowerShell, desde la raíz del repositorio.
 
 ### 1. Requisitos
 
@@ -58,7 +58,7 @@ docker compose ps
 docker compose logs -f web
 ```
 
-El servicio web espera a que PostgreSQL esté disponible y ejecuta las migraciones al iniciar. Espera a que ambos servicios aparezcan saludables. `Ctrl+C` deja de mostrar los registros, sin detener los contenedores.
+El servicio web espera a que PostgreSQL y Redis estén disponibles, ejecuta las migraciones y recopila los archivos estáticos al iniciar. Celery worker y scheduler arrancan después del servidor web. Espera a que los servicios web, db y redis aparezcan saludables. `Ctrl+C` deja de mostrar los registros, sin detener los contenedores.
 
 ### 4. Crear el administrador
 
@@ -93,11 +93,80 @@ docker compose down
 
 Los datos se conservan en el volumen `postgres_data`. **No ejecutes `docker compose down -v` si necesitas conservarlos:** elimina los volúmenes y la base de datos. Cambiar `POSTGRES_PASSWORD` después de inicializar el volumen no cambia automáticamente la contraseña del usuario existente.
 
-El contenedor usa una copia del código: no hay recarga automática ni montaje del repositorio. Reconstruye la imagen para aplicar cambios.
+Los contenedores web, worker y scheduler usan la misma imagen y una copia del código: no hay recarga automática ni montaje del repositorio. Reconstruye y recrea los tres para aplicar cambios.
+
+## Servicios de API, tiempo real y tareas
+
+Las integraciones conservan las sesiones web con CSRF y los contratos usados por las apps Android:
+
+| Componente | Uso en EduMeeting |
+|---|---|
+| Django Channels + Redis | WebSocket por reunión en `/ws/attendance/<meeting_id>/`, autenticado con la sesión web y validación del origen. Solo operadores asignados o superusuarios autorizados; se revalidan permisos en cada evento y ping. |
+| Celery + Redis | Exportación de paquetes firmados de asistencia fuera de la petición web. Worker con dos procesos y scheduler para purgar contenidos caducados cada hora. |
+| drf-spectacular | OpenAPI en `/api/v1/schema/` y Swagger en `/api/v1/docs/`, exclusivos de superusuarios. Los recursos Swagger son locales, sin CDN. |
+| SimpleJWT | Autenticación Bearer adicional para clientes API; las apps móviles existentes siguen usando sesiones. |
+| django-filter | Filtros validados de participantes y reportes, siempre dentro de la reunión autorizada y con la paginación anterior. |
+| django-cors-headers | CORS de API mediante lista explícita; cerrado por defecto. No se necesitan permisos CORS para las apps Android nativas. |
+| django-auditlog | Historial automático de cuentas, grupos, perfiles, reuniones, asignaciones y participantes. No registra contraseñas ni teléfonos; enmascara nombres de participantes. Se conserva `AuditEvent` como historial funcional. |
+
+### Arranque y actualización
+
+Desde la raíz, conserva el complemento HTTPS si lo utilizas:
+
+```powershell
+docker compose -f compose.yaml -f compose.local-https.yaml up --build -d --wait
+docker compose -f compose.yaml -f compose.local-https.yaml ps
+docker compose -f compose.yaml -f compose.local-https.yaml logs --tail=100 worker scheduler
+```
+
+Sin HTTPS local: `docker compose up --build -d --wait`. Redis no publica puertos al equipo y conserva su cola en `redis_data`; no elimines el volumen si hay trabajos pendientes. Los resultados de las exportaciones se almacenan en PostgreSQL para que web y worker no dependan de un directorio compartido. Esta configuración sigue siendo local: en producción se necesitan secretos reales, TLS, permisos de red internos, límites/monitorización y servir estáticos con un servidor adecuado, sin `DEBUG`.
+
+### Eventos de asistencia
+
+El operador web prefiere WebSocket y vuelve a SSE (`/api/v1/attendance/stream/`) si el canal se desconecta. Los eventos siguen persistidos en `RealtimeEvent` y solo se publican tras confirmar la transacción; una caída de Redis se registra y no revierte una operación ya confirmada. WebSocket es una notificación en vivo, no un registro con reproducción: después de una reconexión consulta la API para obtener el estado actual. El canal usa la sesión web, no tokens en la URL. Caddy admite WebSockets sin configuración adicional.
+
+### Exportación en segundo plano
+
+En **Gestionar reuniones**, solo el superusuario ve **Exportar asistencia**. La pantalla consulta el trabajo y ofrece la descarga cuando termina. El flujo API es:
+
+1. `POST /api/v1/meetings/<meeting_id>/exports/` devuelve `202` con `id`, `status`, `status_url`, `download_url`, `error` y `expires_at`. Si no se puede encolar, devuelve `503` y registra la causa.
+2. `GET /api/v1/exports/<job_id>/` devuelve el estado `pending`, `running`, `succeeded` o `failed`. Solo el superusuario solicitante puede consultar o descargar su trabajo.
+3. `GET /api/v1/exports/<job_id>/download/` entrega el archivo `.attendance` firmado; no se publica mediante una URL de medios anónima. Caduca a las 24 horas y se purga su contenido con Celery beat. El registro del trabajo se conserva.
+
+El worker revalida que la cuenta siga activa y sea superusuario. No reintenta automáticamente la generación de paquetes; los fallos quedan explícitos y el usuario puede solicitar un trabajo nuevo. La exportación síncrona anterior (`GET /api/v1/meetings/<meeting_id>/package/`) permanece disponible. La clave privada de firma solo pertenece al servidor/worker y nunca debe incluirse en Android.
+
+### JWT y CORS
+
+- `POST /api/v1/auth/token/`: JSON `{"username":"USUARIO","password":"..."}` devuelve `access` y `refresh`. Se limita a diez solicitudes por minuto y dirección IP en cada proceso web.
+- Envía `Authorization: Bearer <access>` y `X-EduMeeting-Meeting: <uuid>` para las operaciones de reunión. Se aplican los mismos permisos que a las sesiones.
+- `POST /api/v1/auth/token/refresh/`: JSON `{"refresh":"..."}` rota el refresh e invalida el anterior.
+- `POST /api/v1/auth/token/revoke/`: requiere autenticación y un refresh propio; lo añade a la lista negra. Los access ya emitidos caducan en 15 minutos; un refresh dura un día. Desactivar una cuenta o cambiar su contraseña invalida su uso. El logout de sesión móvil no revoca tokens JWT independientes.
+- Las sesiones siguen exigiendo CSRF para POST/PATCH; JWT no sustituye ni desactiva esa protección.
+- Define `DJANGO_CORS_ALLOWED_ORIGINS=https://portal.ejemplo.com,https://otro.ejemplo.com` en `.env` solo cuando exista un frontend en esos orígenes. No uses comodines. CORS no autoriza cuentas ni abre las cookies de sesión a otros sitios; el frontend externo debe usar Bearer. `DJANGO_ALLOWED_HOSTS` identifica al servidor y es una lista distinta.
+
+La auditoría automática se consulta desde `/admin/auditlog/logentry/`, reservado al superusuario. Las operaciones de inicialización de grupos durante las migraciones no se registran como cambios de usuario.
+
+### Validación del backend
+
+```powershell
+docker compose exec web python manage.py check
+docker compose exec web python manage.py makemigrations --check --dry-run
+docker compose exec web python manage.py spectacular --validate --fail-on-warn --file /tmp/edumeeting-openapi.yaml
+docker compose exec web python manage.py test api attendance --noinput
+docker compose exec worker celery -A config inspect ping --timeout=5
+```
+
+Las pruebas de servicios reales se activan expresamente con Redis en ejecución:
+
+```powershell
+docker compose exec -e EDUMEETING_TEST_LIVE_SERVICES=1 web python manage.py test api.test_live_services --noinput
+```
+
+Comprueban la entrega de eventos mediante Redis y generan un paquete firmado con un worker Celery temporal, una cola exclusiva y la base de datos de pruebas. El worker temporal se detiene al finalizar. No ejecutes dos suites a la vez sobre la misma base de datos de pruebas.
 
 ## Configuración inicial de EduMeeting Server
 
-1. El superusuario crea las cuentas y asigna los grupos `ADMINISTRADOR`, `REGISTRAR` u `OPERADOR`, desde `/admin/` o con el comando interactivo siguiente.
+1. El superusuario crea las cuentas y asigna los grupos `ADMINISTRADOR`, `REGISTRAR` u `OPERADOR`, desde **Usuarios y grupos** (`/users/`), desde `/admin/` o con el comando interactivo siguiente.
 2. El usuario `ADMINISTRADOR` crea, edita o desactiva reuniones desde **Gestionar reuniones** (`/meetings/` o EduMeeting Llamadas), una vista independiente de la reunión activa. Cada reunión nueva queda bajo su administración exclusiva.
 3. Selecciona la reunión activa y asigna cuentas existentes de registro y operación. Una cuenta puede estar asignada a varias reuniones y una reunión puede tener varios miembros de cada rol.
 4. Los registradores seleccionan una reunión asignada y registran nombre, teléfono y autorización de contacto. Se crea automáticamente una tarea de llamada para esa persona en esa reunión.
@@ -111,8 +180,16 @@ Los códigos, intentos de llamada, asistencias e historiales generados se consul
 La interfaz está inspirada en [Zensical](https://zensical.org/contributing/): barra superior translúcida (con desenfoque) con el logo, pestañas **Inicio** / **Reuniones**, la reunión activa como píldora, el usuario y **Salir**; menú lateral izquierdo con iconos (usuario, selector de reunión activa, Inicio con las secciones de tus roles, Gestionar reuniones y roles en la reunión), migas de pan (Inicio › Reunión), contenido central y columna derecha «En esta página» en pantallas anchas. En móviles el menú se abre con el botón ☰.
 
 - En Inicio, la reunión activa muestra tarjetas (icono, título, descripción y «→ enlace») que llevan a cada sección permitida por tus roles: asignar usuarios, estadísticas, registrar persona, cola de llamadas, buscar participante y WhatsApp.
+- Solo el superusuario ve la pestaña **Usuarios** y el enlace lateral **Usuarios y grupos** (`/users/`). Desde la misma pantalla puede crear cuentas, editar nombre de usuario, nombre, apellidos y grupos, cambiar la contraseña y activar o desactivar las demás cuentas. No se solicita correo electrónico; los correos existentes se conservan sin modificarse. Al editar, dejar ambos campos de contraseña vacíos conserva la actual; las contraseñas nuevas requieren confirmación y cumplen los validadores de Django. Los operadores necesitan iniciales únicas de dos letras, cuyo perfil se crea o actualiza con el formulario. La lista incluye otros superusuarios y cuentas inactivas; no permite modificar la cuenta propia ni conceder o retirar privilegios de superusuario/personal (eso sigue en `/admin/`). No depende de la reunión activa y las demás cuentas no pueden acceder ni mediante URL directa. Los cambios de estado requieren POST con CSRF y desactivar impide el acceso sin borrar datos, asignaciones ni historial. Se registra quién realizó cada cambio, sin guardar contraseñas en el historial.
 - El botón de sol/luna cambia entre tema claro (blanco) y oscuro (#0B0C0F); la preferencia se guarda en el navegador (por defecto sigue la del sistema).
+- En **Usuarios y grupos**, el campo **Iniciales de operador** solo se habilita al marcar el grupo `OPERADOR` y se deshabilita al desmarcarlo. El servidor ignora las iniciales enviadas para otros grupos; si se retira el grupo de un operador existente, conserva su perfil e iniciales sin modificarlos.
 - Usa fuentes del sistema y no carga recursos externos: funciona sin internet dentro de la red local.
+- Los campos de texto y áreas de texto de los formularios web (incluido `/admin/`) convierten la entrada a **MAYÚSCULAS** al escribir, pegar y enviar. Se exceptúan contraseñas, correos, nombres de usuario y valores técnicos (ocultos, fechas, números, URL y tipo interno de mensaje). Se conserva la selección del cursor y las variables `{{nombre}}` de las plantillas. La conversión cambia el valor enviado, no es solo visual; no modifica registros existentes por sí sola ni las entradas de las aplicaciones Android o API.
+- En el formulario **Usuarios y grupos** hay una excepción específica: **Usuario** se convierte a MAYÚSCULAS; **Nombre** y **Apellidos** conservan la escritura introducida y no se solicita correo electrónico. Las contraseñas tampoco se transforman. El inicio de sesión conserva el nombre de usuario escrito para mantener el acceso a cuentas anteriores.
+- En **Usuarios y grupos**, los grupos se muestran como **Administrador de reuniones**, **Registrador de participantes** y **Operador de llamadas**, tanto en el formulario como en el listado. Sus identificadores internos siguen siendo `ADMINISTRADOR`, `REGISTRAR` y `OPERADOR`, sin cambiar permisos ni asignaciones. Los grupos adicionales conservan su nombre.
+- EduMeeting Llamadas usa esos mismos nombres en sus roles y en la asignación de equipos. EduMeeting Asistencia no utiliza grupos de cuentas: su «Operador» es un identificador local de quien registra asistencias, no el rol de llamadas.
+- Las consultas de EduMeeting Llamadas pasan por Retrofit y OkHttp, con cookies de sesión aisladas por conexión, CSRF de Django, selección de reunión y HTTPS obligatorio. Se mantienen los contratos de la API y los errores se muestran explícitamente; una respuesta exitosa que no sea un objeto JSON se rechaza. La compilación Docker de Llamadas ejecuta sus pruebas de red con MockWebServer antes de generar el APK. Asistencia sigue sin conexión y no necesita cliente Retrofit.
+- Ambas apps usan **DataStore** para preferencias, migrando el tema que antes estaba en SharedPreferences. Llamadas recuerda también la URL del último inicio de sesión correcto, pero no contraseñas ni sesiones. Asistencia ya utiliza **Room** para reuniones, participantes, asistencias e historial local y **DataStore** para reunión seleccionada e identificación del dispositivo/registrador. No se añade Room a Llamadas porque sus datos siguen en el servidor, ni WorkManager: no hay sincronización automática ni trabajos diferidos; reintentar llamadas o registros en segundo plano podría duplicar operaciones o usar asignaciones vencidas.
 - Plantilla base: `edumeeting-server/templates/attendance/base.html`; estilos: `attendance/static/attendance/app.css`; tema: `theme.js`.
 
 ### Crear una cuenta de cada grupo sin entrar a `/admin/`

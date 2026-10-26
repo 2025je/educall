@@ -1,8 +1,19 @@
 from django.urls import path
 
 from . import views
+from .auth import ObtainTokenView, RefreshTokenView, RevokeTokenView
+from .exports import PackageExportCreateView, PackageExportDownloadView, PackageExportStatusView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
+    path("schema/", SpectacularAPIView.as_view(), name="api-schema"),
+    path("docs/", SpectacularSwaggerView.as_view(url_name="api-schema"), name="api-docs"),
+    path("auth/token/", ObtainTokenView.as_view(), name="token-obtain"),
+    path("auth/token/refresh/", RefreshTokenView.as_view(), name="token-refresh"),
+    path("auth/token/revoke/", RevokeTokenView.as_view(), name="token-revoke"),
+    path("meetings/<uuid:meeting_id>/exports/", PackageExportCreateView.as_view(), name="package-export-create"),
+    path("exports/<uuid:job_id>/", PackageExportStatusView.as_view(), name="package-export-status"),
+    path("exports/<uuid:job_id>/download/", PackageExportDownloadView.as_view(), name="package-export-download"),
     path("session/", views.SessionContextView.as_view(), name="session-context"),
     path("meetings/", views.MeetingListView.as_view(), name="meetings"),
     path("meetings/select/", views.SelectMeetingView.as_view(), name="api-select-meeting"),

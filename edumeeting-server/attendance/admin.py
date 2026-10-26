@@ -19,6 +19,7 @@ from .models import (
     OperatorProfile,
     Participant,
     ParticipantMeetingChange,
+    PackageExportJob,
 )
 
 
@@ -144,6 +145,12 @@ class MessageTemplateAdmin(admin.ModelAdmin):
     search_fields = ("name", "content")
     readonly_fields = ("created_by", "updated_by")
 
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        field = super().formfield_for_dbfield(db_field, request, **kwargs)
+        if field is not None and db_field.name == "message_type":
+            field.widget.attrs["data-preserve-case"] = ""
+        return field
+
     def save_model(self, request, obj, form, change):
         if not change:
             obj.created_by = request.user
@@ -167,3 +174,4 @@ admin.site.register(
 admin.site.register(AttendanceCode, ReadOnlyAdmin)
 admin.site.register(AttendancePackage, ReadOnlyAdmin)
 admin.site.register(AttendanceRecord, ReadOnlyAdmin)
+admin.site.register(PackageExportJob, ReadOnlyAdmin)

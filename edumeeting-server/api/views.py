@@ -1,9 +1,12 @@
 import io
+import asyncio
 import json
 import time
 
 from django.contrib.auth import logout
 from django.core.paginator import Paginator
+from django.core.exceptions import PermissionDenied
+from channels.db import database_sync_to_async
 from django.db import IntegrityError, transaction
 from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.urls import reverse
@@ -49,10 +52,13 @@ from attendance.workspace import (
     update_members,
     workspace_context,
 )
+from attendance.realtime import event_meetings
+from django.contrib.auth import get_user_model
 
 from . import serializers as s
 from .negotiation import IgnoreClientContentNegotiation
 from .permissions import IsSuperuser, model_permission, role_permission
+from .filters import AttendanceReportFilter, ParticipantFilter, apply_filters
 
 
 def _code_payload(code):
@@ -208,8 +214,7 @@ class ParticipantSearchView(APIView):
         query = request.query_params.get("q", "").strip()
         if query and len(query) < 2:
             return Response({"results": []})
-        people = Participant.objects.filter(full_name__icontains=query) | Participant.objects.filter(phone__icontains=query)
-        people = people.filter(origin_meeting=meeting)
+        people = apply_filters(ParticipantFilter, request, Participant.objects.filter(origin_meeting=meeting))
         try:
             page_number = int(request.query_params.get("page", "1"))
         except ValueError:
@@ -373,25 +378,39 @@ class EventStreamView(RawResponseAPIView):
         user = request.user
 
         def still_allowed():
-            if user.is_superuser:
-                return True
-            return accessible_meetings(user).filter(pk=meeting.pk, operators=user).exists()
+            current_user = get_user_model().objects.filter(pk=user.pk, is_active=True).first()
+            if current_user is None or not current_user.has_perm("attendance.view_realtimeevent"):
+                return False
+            try:
+                require_meeting_role(current_user, Meeting.objects.get(pk=meeting.pk), "OPERADOR")
+            except (PermissionDenied, Meeting.DoesNotExist):
+                return False
+            return True
 
-        def events():
+        @database_sync_to_async
+        def event_batch(current):
+            rows = list(RealtimeEvent.objects.filter(pk__gt=current).order_by("pk")[:100])
+            return [
+                (event.pk, event.topic, event.payload, str(meeting.pk) in event_meetings(event))
+                for event in rows
+            ]
+
+        async def events():
             current = cursor
             deadline = time.monotonic() + 25
             while time.monotonic() < deadline:
-                rows = list(RealtimeEvent.objects.filter(pk__gt=current).order_by("pk")[:100])
-                for event in rows:
-                    current = event.pk
-                    if not still_allowed():
+                if not await database_sync_to_async(still_allowed)():
+                    return
+                rows = await event_batch(current)
+                for event_id, topic, payload, visible in rows:
+                    current = event_id
+                    if not await database_sync_to_async(still_allowed)():
                         return
-                    task_id = event.payload.get("task_id")
-                    if task_id and CallTask.objects.filter(pk=task_id, meeting=meeting).exists():
-                        yield f"id: {event.pk}\nevent: {event.topic}\ndata: {json.dumps(event.payload)}\n\n"
+                    if visible:
+                        yield f"id: {event_id}\nevent: {topic}\ndata: {json.dumps(payload)}\n\n"
                 if not rows:
                     yield ": keep-alive\n\n"
-                    time.sleep(2)
+                    await asyncio.sleep(2)
 
         response = StreamingHttpResponse(events(), content_type="text/event-stream")
         response["Cache-Control"] = "no-cache"
@@ -410,7 +429,7 @@ class MeetingReportView(APIView):
             page_size = min(max(int(request.query_params.get("page_size", "50")), 1), 100)
         except ValueError:
             raise ValidationError("page y page_size deben ser números enteros.")
-        records = AttendanceRecord.objects.filter(effective_meeting=meeting)
+        records = apply_filters(AttendanceReportFilter, request, AttendanceRecord.objects.filter(effective_meeting=meeting))
         participants = Participant.objects.filter(origin_meeting=meeting)
         accepted = records.filter(status=AttendanceRecord.Status.ACCEPTED)
         page = Paginator(records.select_related("participant", "origin_meeting"), page_size).get_page(page_number)
