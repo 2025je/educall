@@ -51,6 +51,7 @@ from attendance.services import (
 )
 from attendance.workspace import (
     create_participant,
+    global_statistics,
     meeting_statistics,
     record_meeting_update,
     select_active_meeting,
@@ -62,7 +63,7 @@ from django.contrib.auth import get_user_model
 
 from . import serializers as s
 from .negotiation import IgnoreClientContentNegotiation
-from .permissions import IsAttendanceAdministrator, model_permission, role_permission
+from .permissions import IsAttendanceAdministrator, IsSuperuser, model_permission, role_permission
 from .filters import AttendanceReportFilter, ParticipantFilter, apply_filters
 
 
@@ -83,6 +84,7 @@ class SessionContextView(APIView):
         selected = context["active_meeting"]
         return Response({
             "username": request.user.get_username(),
+            "is_superuser": request.user.is_superuser,
             "meeting": {"id": str(selected.pk), "name": selected.name} if selected else None,
             **{key: context[key] for key in ("can_create", "can_manage", "can_register", "can_operate")},
         })
@@ -117,6 +119,15 @@ class MeetingMembersView(APIView):
 class MeetingStatisticsView(APIView):
     def get(self, request):
         return Response(meeting_statistics(active_meeting(request, "ADMINISTRADOR")))
+
+
+class GlobalStatisticsView(APIView):
+    """Read-only overview of every meeting; the superuser's only access to meeting data."""
+
+    permission_classes = (IsAuthenticated, IsSuperuser)
+
+    def get(self, request):
+        return Response(global_statistics())
 
 
 class RegisterParticipantView(APIView):

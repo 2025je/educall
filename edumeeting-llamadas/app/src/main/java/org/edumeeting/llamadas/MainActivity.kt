@@ -491,6 +491,13 @@ private fun DialScreen() {
                                         focusManager.clearFocus()
                                         runRequest {
                                             val sessionApi = withContext(Dispatchers.IO) { DjangoSessionApi(serverUrl).also { it.login(username, password) } }
+                                            val account = withContext(Dispatchers.IO) { sessionApi.get("/api/v1/session/") }
+                                            if (account.optBoolean("is_superuser")) {
+                                                withContext(Dispatchers.IO) { runCatching { sessionApi.logout() } }
+                                                throw IllegalStateException(
+                                                    "El superusuario no opera reuniones. Usa la web para gestionar usuarios y ver estadísticas.",
+                                                )
+                                            }
                                             try {
                                                 preferences.setServerUrl(serverUrl)
                                             } catch (error: IOException) {

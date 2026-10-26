@@ -66,7 +66,7 @@ class OfflineAttendanceView(OfflineMeetingMixin, View):
                 "review": records.filter(status=AttendanceRecord.Status.REVIEW).count(),
                 "rejected": records.filter(status=AttendanceRecord.Status.REJECTED).count(),
             },
-            "cross_meeting": meeting.allow_cross_meeting_attendance and not request.user.is_superuser,
+            "cross_meeting": meeting.allow_cross_meeting_attendance,
         })
 
 

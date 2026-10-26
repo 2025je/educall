@@ -7,6 +7,7 @@ urlpatterns = [
     path("users/", views.UserManagementView.as_view(), name="user-list"),
     path("users/<int:user_id>/edit/", views.UserManagementView.as_view(), name="user-edit"),
     path("users/<int:user_id>/toggle/", views.UserToggleView.as_view(), name="user-toggle"),
+    path("statistics/", views.StatisticsView.as_view(), name="statistics"),
     path("workspace/select/", workspace.SelectMeetingView.as_view(), name="select-meeting"),
     path("workspace/members/", workspace.MembersView.as_view(), name="meeting-members"),
     path("workspace/register/", workspace.RegisterParticipantView.as_view(), name="register-participant"),

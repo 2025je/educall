@@ -21,13 +21,17 @@
     </a>
     {% if user.is_authenticated %}
     <nav class="md-tabs" aria-label="Secciones">
+      {% if user.is_superuser %}
+      <a class="md-tabs__link{% block tab_statistics %}{% endblock %}" href="{% url 'statistics' %}">Estadísticas</a>
+      <a class="md-tabs__link{% block tab_users %}{% endblock %}" href="{% url 'user-list' %}">Usuarios</a>
+      {% else %}
       <a class="md-tabs__link{% block tab_home %}{% endblock %}" href="{% url 'operator' %}">Inicio</a>
       {% if can_create %}<a class="md-tabs__link{% block tab_meetings %}{% endblock %}" href="{% url 'meeting-management' %}">Reuniones</a>{% endif %}
-      {% if user.is_superuser %}<a class="md-tabs__link{% block tab_users %}{% endblock %}" href="{% url 'user-list' %}">Usuarios</a>{% endif %}
+      {% endif %}
     </nav>
     {% endif %}
     <span class="md-header__spacer"></span>
-    {% if user.is_authenticated %}
+    {% if user.is_authenticated and not user.is_superuser %}
     <span class="md-header__topic" title="Reunión activa">Reunión activa: {% if active_meeting %}{{ active_meeting.name }}{% else %}Sin seleccionar{% endif %}</span>
     {% endif %}
     <button type="button" class="md-icon md-theme-toggle" data-theme-toggle title="Cambiar tema claro/oscuro" aria-label="Cambiar tema claro/oscuro">
@@ -49,6 +53,7 @@
           <span class="md-avatar" aria-hidden="true">{{ user.get_username|first|upper }}</span>
           <span class="md-sidebar__title">Usuario: {{ user.get_username }}</span>
         </div>
+        {% if not user.is_superuser %}
         <form method="post" action="{% url 'select-meeting' %}" class="md-meeting-switch">
           {% csrf_token %}
           <label for="active-meeting">Reunión activa</label>
@@ -60,13 +65,15 @@
           </select>
           <button class="md-button md-button--small md-button--block">Cambiar reunión</button>
         </form>
+        {% endif %}
         <nav class="md-nav">
           <p class="md-nav__caption">Navegación</p>
           <ul>
-            <li><a class="md-nav__link{% block nav_home %}{% endblock %}" href="{% url 'operator' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>Inicio</a>{% block nav_home_children %}{% endblock %}</li>
+            {% if not user.is_superuser %}<li><a class="md-nav__link{% block nav_home %}{% endblock %}" href="{% url 'operator' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>Inicio</a>{% block nav_home_children %}{% endblock %}</li>{% endif %}
             {% if can_create %}<li><a class="md-nav__link{% block nav_meetings %}{% endblock %}" href="{% url 'meeting-management' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Gestionar reuniones</a></li>{% endif %}
             {% if can_manage and active_meeting %}<li><a class="md-nav__link{% block nav_offline %}{% endblock %}" href="{% url 'offline-attendance' active_meeting.pk %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Asistencia offline</a></li>{% endif %}
             {% if user.is_superuser %}
+            <li><a class="md-nav__link{% block nav_statistics %}{% endblock %}" href="{% url 'statistics' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M18 17V9M13 17V5M8 17v-3"/></svg>Estadísticas</a></li>
             <li><a class="md-nav__link" href="{% url 'api-docs' %}">Documentación de API</a></li>
             <li><a class="md-nav__link{% block nav_users %}{% endblock %}" href="{% url 'user-list' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a7 7 0 0 1 14 0v2M17 3a4 4 0 0 1 0 8M22 21v-2a7 7 0 0 0-4-6"/></svg>Usuarios y grupos</a></li>
             <li><a class="md-nav__link" href="{% url 'session-context' %}"><svg class="md-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>API REST (navegable)</a></li>
@@ -74,6 +81,7 @@
             {% endif %}
           </ul>
         </nav>
+        {% if not user.is_superuser %}
         <div class="md-sidebar__roles">
           <p class="md-nav__caption">Roles en esta reunión</p>
           {% if can_manage %}<span class="md-chip">Administrador</span>{% endif %}
@@ -81,12 +89,13 @@
           {% if can_operate %}<span class="md-chip">Operador</span>{% endif %}
           {% if not can_manage and not can_register and not can_operate %}<span class="md-chip md-chip--muted">Ninguno</span>{% endif %}
         </div>
+        {% endif %}
       </div>
     </aside>
 
     <main class="md-main">
       <article class="md-content">
-        <nav class="md-path" aria-label="Ruta"><a href="{% url 'operator' %}">Inicio</a>{% block breadcrumbs %}{% endblock %}</nav>
+        <nav class="md-path" aria-label="Ruta"><a href="{% if user.is_superuser %}{% url 'statistics' %}{% else %}{% url 'operator' %}{% endif %}">Inicio</a>{% block breadcrumbs %}{% endblock %}</nav>
         {% for message in messages %}<div class="admonition {% if message.level_tag == 'error' %}danger{% elif message.level_tag == 'success' %}success{% else %}info{% endif %}" role="status">{{ message }}</div>{% endfor %}
         {% block content %}{% endblock %}
       </article>

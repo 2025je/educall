@@ -28,16 +28,20 @@ class BackendIntegrationTests(TestCase):
         self.root = get_user_model().objects.create_superuser("root", password="Root-Testing-Canyon-982!")
         self.operator = get_user_model().objects.create_user("operator", password="Operator-Testing-Canyon-982!")
         self.operator.groups.add(Group.objects.get(name="OPERADOR"))
+        self.owner = get_user_model().objects.create_user("owner", password="Owner-Testing-Canyon-982!")
+        self.owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.meeting = Meeting.objects.create(
-            number=1, name="Reunión", starts_at=timezone.now(), administrator=self.root,
+            number=1, name="Reunión", starts_at=timezone.now(), administrator=self.owner,
             attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
         )
         self.meeting.operators.add(self.operator)
-        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.root)
+        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
 
     def tokens(self, user=None):
         user = user or self.operator
-        password = "Root-Testing-Canyon-982!" if user == self.root else "Operator-Testing-Canyon-982!"
+        password = {
+            self.root: "Root-Testing-Canyon-982!", self.owner: "Owner-Testing-Canyon-982!",
+        }.get(user, "Operator-Testing-Canyon-982!")
         response = self.client.post(reverse("token-obtain"), {"username": user.username, "password": password}, content_type="application/json")
         self.assertEqual(response.status_code, 200, response.content)
         return response.json()
@@ -122,8 +126,10 @@ class BackendIntegrationTests(TestCase):
         participant = Participant.objects.create(full_name="Ana", origin_meeting=self.meeting)
         for method, status, meeting in (("QR", "accepted", self.meeting), ("MANUAL", "review", self.meeting), ("QR", "accepted", self.other)):
             AttendanceRecord.objects.create(participant=participant, effective_meeting=meeting, device_id="test", method=method, status=status, recorded_at=timezone.now())
-        self.client.force_login(self.root)
         url = reverse("meeting-report", args=[self.meeting.pk])
+        self.client.force_login(self.root)
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.client.force_login(self.owner)
         response = self.client.get(url, {"method": "QR", "status": "accepted"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["submissions"], 1)
@@ -153,16 +159,21 @@ class BackendIntegrationTests(TestCase):
         self.assertNotIn("password", json.dumps(entry.changes))
         self.client.logout()
         client, _ = self.bearer(self.root)
-        response = client.post(reverse("meetings"), {"number": 3, "name": "Nueva", "starts_at": timezone.now().isoformat()}, format="json")
+        payload = {"number": 3, "name": "Nueva", "starts_at": timezone.now().isoformat()}
+        self.assertEqual(client.post(reverse("meetings"), payload, format="json").status_code, 403)
+        client, _ = self.bearer(self.owner)
+        response = client.post(reverse("meetings"), payload, format="json")
         self.assertEqual(response.status_code, 201, response.content)
         meeting = Meeting.objects.get(pk=response.json()["meeting"]["id"])
-        self.assertEqual(LogEntry.objects.get_for_object(meeting).filter(action=LogEntry.Action.CREATE).last().actor, self.root)
+        self.assertEqual(LogEntry.objects.get_for_object(meeting).filter(action=LogEntry.Action.CREATE).last().actor, self.owner)
 
     def create_job(self, **kwargs):
-        return PackageExportJob.objects.create(meeting=self.meeting, requested_by=self.root, expires_at=timezone.now() + timedelta(days=1), **kwargs)
+        return PackageExportJob.objects.create(meeting=self.meeting, requested_by=self.owner, expires_at=timezone.now() + timedelta(days=1), **kwargs)
 
     def test_export_queues_after_commit_and_restricts_status_and_download(self):
         self.client.force_login(self.root)
+        self.assertEqual(self.client.post(reverse("package-export-create", args=[self.meeting.pk])).status_code, 403)
+        self.client.force_login(self.owner)
         with patch("api.exports.generate_attendance_package.delay") as enqueue:
             with self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(reverse("package-export-create", args=[self.meeting.pk]), {}, content_type="application/json")
@@ -174,6 +185,10 @@ class BackendIntegrationTests(TestCase):
         self.assertEqual(self.client.get(reverse("package-export-download", args=[job.pk])).status_code, 400)
         another_root = get_user_model().objects.create_superuser("other-root", password=None)
         self.client.force_login(another_root)
+        self.assertEqual(self.client.get(reverse("package-export-status", args=[job.pk])).status_code, 403)
+        another_owner = get_user_model().objects.create_user("other-owner")
+        another_owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
+        self.client.force_login(another_owner)
         self.assertEqual(self.client.get(reverse("package-export-status", args=[job.pk])).status_code, 404)
         self.client.force_login(self.operator)
         self.assertEqual(self.client.post(reverse("package-export-create", args=[self.meeting.pk])).status_code, 403)
@@ -181,14 +196,14 @@ class BackendIntegrationTests(TestCase):
 
     def test_export_worker_generates_once_and_downloads_and_expires(self):
         job = self.create_job()
-        package = AttendancePackage.objects.create(meeting=self.meeting, created_by=self.root, sha256="0" * 64)
+        package = AttendancePackage.objects.create(meeting=self.meeting, created_by=self.owner, sha256="0" * 64)
         with patch("attendance.tasks.export_attendance_package", return_value=(package, b"signed-archive")) as export:
             generate_attendance_package(str(job.pk))
             generate_attendance_package(str(job.pk))
             export.assert_called_once()
         job.refresh_from_db()
         self.assertEqual(job.status, "succeeded")
-        self.client.force_login(self.root)
+        self.client.force_login(self.owner)
         response = self.client.get(reverse("package-export-download", args=[job.pk]))
         self.assertEqual(b"".join(response.streaming_content), b"signed-archive")
         self.assertEqual(response["Cache-Control"], "private, no-store")
@@ -218,15 +233,16 @@ class BackendIntegrationTests(TestCase):
         self.assertEqual(failed.status, "failed")
         self.assertEqual(failed.error, "Falta clave de firma")
         revoked = self.create_job()
-        self.root.is_active = False
-        self.root.save(update_fields=["is_active"])
+        self.owner.is_active = False
+        self.owner.save(update_fields=["is_active"])
         with self.assertLogs("attendance.tasks", level="ERROR"):
             with self.assertRaises(DomainError):
                 generate_attendance_package(str(revoked.pk))
 
-    def test_offline_attendance_is_available_to_superusers_and_meeting_owners(self):
+    def test_offline_attendance_is_only_available_to_meeting_owners(self):
         self.client.force_login(self.root)
-        self.assertContains(self.client.get(reverse("meeting-management")), reverse("offline-attendance", args=[self.meeting.pk]))
+        self.assertEqual(self.client.get(reverse("meeting-management")).status_code, 403)
+        self.assertEqual(self.client.get(reverse("offline-attendance", args=[self.meeting.pk])).status_code, 403)
         admin = get_user_model().objects.create_user("admin")
         admin.groups.add(Group.objects.get(name="ADMINISTRADOR"))
         self.meeting.administrator = admin
@@ -255,9 +271,11 @@ class WebsocketIntegrationTests(TransactionTestCase):
         self.user = get_user_model().objects.create_user("operator")
         self.user.groups.add(Group.objects.get(name="OPERADOR"))
         self.root = get_user_model().objects.create_superuser("root", password=None)
-        self.meeting = Meeting.objects.create(number=1, name="Reunión", starts_at=timezone.now(), administrator=self.root)
+        self.owner = get_user_model().objects.create_user("owner")
+        self.owner.groups.add(Group.objects.get(name="ADMINISTRADOR"))
+        self.meeting = Meeting.objects.create(number=1, name="Reunión", starts_at=timezone.now(), administrator=self.owner)
         self.meeting.operators.add(self.user)
-        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.root)
+        self.other = Meeting.objects.create(number=2, name="Otra", starts_at=timezone.now(), administrator=self.owner)
 
     def connection(self, meeting=None, user=None):
         communicator = WebsocketCommunicator(URLRouter([

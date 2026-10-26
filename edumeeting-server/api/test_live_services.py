@@ -18,6 +18,7 @@ from channels.testing import WebsocketCommunicator
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.db import connection
 from django.test import TransactionTestCase
 from django.urls import path
@@ -33,17 +34,20 @@ from config.celery import app
 class LiveServicesTests(TransactionTestCase):
     def setUp(self):
         self.root = get_user_model().objects.create_superuser("live-test-root", password=None)
+        self.owner = get_user_model().objects.create_user("live-test-owner")
+        self.owner.groups.add(*Group.objects.filter(name__in=("ADMINISTRADOR", "OPERADOR")))
         self.meeting = Meeting.objects.create(
-            number=1, name="Servicios reales", starts_at=timezone.now(), administrator=self.root,
+            number=1, name="Servicios reales", starts_at=timezone.now(), administrator=self.owner,
             attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
         )
+        self.meeting.operators.add(self.owner)
 
     def test_redis_delivers_committed_event_to_websocket(self):
         async def scenario():
             communicator = WebsocketCommunicator(URLRouter([
                 path("ws/attendance/<uuid:meeting_id>/", AttendanceConsumer.as_asgi()),
             ]), f"/ws/attendance/{self.meeting.pk}/")
-            communicator.scope["user"] = self.root
+            communicator.scope["user"] = self.owner
             self.assertTrue((await communicator.connect())[0])
             try:
                 await database_sync_to_async(RealtimeEvent.objects.create)(
@@ -69,7 +73,7 @@ class LiveServicesTests(TransactionTestCase):
         queue = f"integration-{uuid.uuid4().hex}"
         hostname = f"{queue}@test"
         job = PackageExportJob.objects.create(
-            meeting=self.meeting, requested_by=self.root, expires_at=timezone.now() + timedelta(hours=1),
+            meeting=self.meeting, requested_by=self.owner, expires_at=timezone.now() + timedelta(hours=1),
         )
         with tempfile.TemporaryFile(mode="w+b") as log:
             process = subprocess.Popen([

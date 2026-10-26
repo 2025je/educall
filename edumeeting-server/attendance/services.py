@@ -520,7 +520,7 @@ def export_attendance_package(meeting_id, user):
     ).order_by("sequence")
     if not meeting.allow_cross_meeting_attendance:
         code_query = code_query.filter(meeting=meeting)
-    elif not user.is_superuser:
+    else:
         # Un administrador solo exporta participantes de sus propias reuniones.
         code_query = code_query.filter(meeting__administrator=user)
     candidates = sorted(

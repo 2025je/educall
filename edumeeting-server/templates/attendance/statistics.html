@@ -1,0 +1,44 @@
+{% extends "attendance/base.html" %}
+{% block title %}Estadísticas{% endblock %}
+{% block nav_statistics %} md-nav__link--active{% endblock %}
+{% block tab_statistics %} md-tabs__link--active{% endblock %}
+{% block breadcrumbs %} <span>›</span> <span>Estadísticas</span>{% endblock %}
+{% block toc %}<li><a class="md-nav__link" href="#resumen">Resumen general</a></li><li><a class="md-nav__link" href="#reuniones">Por reunión</a></li>{% endblock %}
+{% block content %}
+<h1>Estadísticas</h1>
+<p>Vista de solo lectura para el superusuario. Incluye todas las reuniones, activas e inactivas. La gestión de cada reunión corresponde exclusivamente a su administrador.</p>
+<section class="md-section">
+  <h2 id="resumen">Resumen general</h2>
+  <div class="md-stats">
+    <div><strong>{{ statistics.totals.meetings }}</strong><span>Reuniones ({{ statistics.totals.active_meetings }} activas)</span></div>
+    <div><strong>{{ statistics.totals.registered }}</strong><span>Personas registradas</span></div>
+    <div><strong>{{ statistics.totals.pending_calls }}</strong><span>Llamadas pendientes</span></div>
+    <div><strong>{{ statistics.totals.completed_calls }}</strong><span>Llamadas finalizadas</span></div>
+    <div><strong>{{ statistics.totals.call_attempts }}</strong><span>Intentos</span></div>
+    <div><strong>{{ statistics.totals.accepted }}</strong><span>Invitaciones aceptadas</span></div>
+    <div><strong>{{ statistics.totals.attendance }}</strong><span>Asistencias</span></div>
+    <div><strong>{{ statistics.totals.pending_review }}</strong><span>En revisión</span></div>
+  </div>
+</section>
+<section class="md-section">
+  <h2 id="reuniones">Por reunión</h2>
+  {% for item in statistics.meetings %}
+  <h3>{{ item.number }} · {{ item.meeting_name }} {% if item.active %}<span class="md-chip md-chip--ok">Activa</span>{% else %}<span class="md-chip md-chip--muted">Inactiva</span>{% endif %}</h3>
+  <p class="md-meta">{{ item.starts_at|date:"d/m/Y H:i" }} · Administrador: {{ item.administrator|default:"Sin asignar" }}</p>
+  <div class="md-typeset__table"><table>
+    <thead><tr><th scope="col">Registradas</th><th scope="col">Pendientes</th><th scope="col">Finalizadas</th><th scope="col">Intentos</th><th scope="col">Aceptadas</th><th scope="col">Asistencias</th><th scope="col">En revisión</th><th scope="col">Rechazadas</th></tr></thead>
+    <tbody><tr><td>{{ item.registered }}</td><td>{{ item.pending_calls }}</td><td>{{ item.completed_calls }}</td><td>{{ item.call_attempts }}</td><td>{{ item.accepted }}</td><td>{{ item.attendance }}</td><td>{{ item.pending_review }}</td><td>{{ item.rejected }}</td></tr></tbody>
+  </table></div>
+  {% if item.users %}
+  <details><summary>Actividad por usuario</summary>
+    <div class="md-typeset__table"><table>
+      <thead><tr><th scope="col">Usuario</th><th scope="col">Personas registradas</th><th scope="col">Intentos</th><th scope="col">Aceptaciones</th></tr></thead>
+      <tbody>{% for row in item.users %}<tr><td>{{ row.username }}</td><td>{{ row.registered }}</td><td>{{ row.call_attempts }}</td><td>{{ row.accepted }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  {% endif %}
+  {% empty %}
+  <div class="admonition info"><p class="admonition-title">Sin reuniones</p><p>Todavía no hay reuniones creadas.</p></div>
+  {% endfor %}
+</section>
+{% endblock %}

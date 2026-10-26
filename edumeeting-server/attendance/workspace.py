@@ -8,7 +8,7 @@ from django.views import View
 
 from .access import accessible_meetings, active_meeting, has_role, require_meeting_role
 from .forms import MeetingMembersForm, ParticipantRegistrationForm
-from .models import AuditEvent, CallAttempt, CallTask, Meeting, MessageTemplate, Participant
+from .models import AttendanceRecord, AuditEvent, CallAttempt, CallTask, Meeting, MessageTemplate, Participant
 
 
 def capabilities(user, meeting):
@@ -46,6 +46,8 @@ class HomeView(LoginRequiredMixin, View):
     http_method_names = ["get"]
 
     def get(self, request):
+        if request.user.is_superuser:
+            return redirect("statistics")
         context = workspace_context(request)
         context["participant_form"] = ParticipantRegistrationForm()
         if context["can_manage"]:
@@ -93,6 +95,28 @@ def meeting_statistics(meeting):
             "accepted": attempts.filter(operator=user, outcome="accepted").count(),
         } for user in users],
     }
+
+
+def global_statistics():
+    """Read-only overview of every meeting for the superuser."""
+    meetings = []
+    for meeting in Meeting.objects.select_related("administrator").order_by("-active", "-starts_at", "number"):
+        records = AttendanceRecord.objects.filter(effective_meeting=meeting)
+        meetings.append({
+            **meeting_statistics(meeting),
+            "number": meeting.number,
+            "starts_at": meeting.starts_at,
+            "active": meeting.active,
+            "administrator": meeting.administrator.get_username() if meeting.administrator else None,
+            "attendance": records.filter(status=AttendanceRecord.Status.ACCEPTED).count(),
+            "pending_review": records.filter(status=AttendanceRecord.Status.REVIEW).count(),
+            "rejected": records.filter(status=AttendanceRecord.Status.REJECTED).count(),
+        })
+    keys = ("registered", "pending_calls", "completed_calls", "call_attempts", "accepted", "attendance", "pending_review", "rejected")
+    totals = {key: sum(item[key] for item in meetings) for key in keys}
+    totals["meetings"] = len(meetings)
+    totals["active_meetings"] = sum(1 for item in meetings if item["active"])
+    return {"totals": totals, "meetings": meetings}
 
 
 def update_members(meeting, registrar_ids, operator_ids, actor):

@@ -101,7 +101,7 @@ Las integraciones conservan las sesiones web con CSRF y los contratos usados por
 
 | Componente | Uso en EduMeeting |
 |---|---|
-| Django Channels + Redis | WebSocket por reunión en `/ws/attendance/<meeting_id>/`, autenticado con la sesión web y validación del origen. Solo operadores asignados o superusuarios autorizados; se revalidan permisos en cada evento y ping. |
+| Django Channels + Redis | WebSocket por reunión en `/ws/attendance/<meeting_id>/`, autenticado con la sesión web y validación del origen. Solo operadores asignados (el superusuario no opera reuniones); se revalidan permisos en cada evento y ping. |
 | Celery + Redis | Exportación de paquetes firmados de asistencia fuera de la petición web. Worker con dos procesos y scheduler para purgar contenidos caducados cada hora. |
 | drf-spectacular | OpenAPI en `/api/v1/schema/` y Swagger en `/api/v1/docs/`, exclusivos de superusuarios. Los recursos Swagger son locales, sin CDN. |
 | SimpleJWT | Autenticación Bearer adicional para clientes API; las apps móviles existentes siguen usando sesiones. |
@@ -127,13 +127,13 @@ El operador web prefiere WebSocket y vuelve a SSE (`/api/v1/attendance/stream/`)
 
 ### Exportación en segundo plano
 
-En **Gestionar reuniones**, solo el superusuario ve **Exportar asistencia**. La pantalla consulta el trabajo y ofrece la descarga cuando termina. El flujo API es:
+En **Gestionar reuniones → Asistencia offline**, solo el administrador de la reunión ve **Exportar asistencia**. La pantalla consulta el trabajo y ofrece la descarga cuando termina. El flujo API es:
 
 1. `POST /api/v1/meetings/<meeting_id>/exports/` devuelve `202` con `id`, `status`, `status_url`, `download_url`, `error` y `expires_at`. Si no se puede encolar, devuelve `503` y registra la causa.
-2. `GET /api/v1/exports/<job_id>/` devuelve el estado `pending`, `running`, `succeeded` o `failed`. Solo el superusuario solicitante puede consultar o descargar su trabajo.
+2. `GET /api/v1/exports/<job_id>/` devuelve el estado `pending`, `running`, `succeeded` o `failed`. Solo el administrador que lo solicitó puede consultar o descargar su trabajo.
 3. `GET /api/v1/exports/<job_id>/download/` entrega el archivo `.attendance` firmado; no se publica mediante una URL de medios anónima. Caduca a las 24 horas y se purga su contenido con Celery beat. El registro del trabajo se conserva.
 
-El worker revalida que la cuenta siga activa y sea superusuario. No reintenta automáticamente la generación de paquetes; los fallos quedan explícitos y el usuario puede solicitar un trabajo nuevo. La exportación síncrona anterior (`GET /api/v1/meetings/<meeting_id>/package/`) permanece disponible. La clave privada de firma solo pertenece al servidor/worker y nunca debe incluirse en Android.
+El worker revalida que la cuenta siga activa y siga siendo administradora de la reunión. No reintenta automáticamente la generación de paquetes; los fallos quedan explícitos y el usuario puede solicitar un trabajo nuevo. La exportación síncrona anterior (`GET /api/v1/meetings/<meeting_id>/package/`) permanece disponible. La clave privada de firma solo pertenece al servidor/worker y nunca debe incluirse en Android.
 
 ### JWT y CORS
 
@@ -205,7 +205,17 @@ Los healthchecks de Compose usan `/health/` para `web` y `celery inspect ping` p
 5. Los operadores seleccionan una reunión asignada para solicitar el siguiente teléfono o buscar/listar sus participantes. Cada operador necesita un perfil con iniciales únicas de **dos letras mayúsculas**, por ejemplo `JU`.
 6. El superusuario configura plantillas activas de WhatsApp. Las variables permitidas son `{{nombre}}`, `{{fecha_reunion}}`, `{{hora_reunion}}`, `{{lugar_reunion}}` y `{{codigo_asistencia}}`.
 
-Los códigos, intentos de llamada, asistencias e historiales generados se consultan desde el administrador. Cambia la reunión de origen mediante el formulario del participante; se conserva el historial y se invalidan los códigos anteriores.
+Los códigos, intentos de llamada, asistencias e historiales generados se consultan en `/admin/` en **solo lectura**: reuniones, participantes y tareas de llamada no se pueden crear, modificar ni borrar desde ahí. Los cambios de reuniones los hace su administrador desde **Gestionar reuniones**.
+
+### Superusuario: solo usuarios y estadísticas
+
+El superusuario **no opera ni modifica reuniones**, aunque pertenezca a grupos o esté asignado como miembro: no crea, edita ni activa/desactiva reuniones, no asigna usuarios, no registra personas, no atiende llamadas, no define el PIN, no exporta/importa asistencia ni resuelve conflictos. Esto se aplica en el servidor, por lo que vale igual para la web, la API y EduMeeting Llamadas (que además rechaza el inicio de sesión del superusuario con un aviso). EduMeeting Asistencia no usa cuentas del servidor.
+
+Sus funciones son:
+
+- **Usuarios y grupos** (`/users/`): crear, editar y activar/desactivar cuentas.
+- **Estadísticas** (`/statistics/`, pestaña **Estadísticas**; también es su página de inicio): vista de solo lectura de **todas** las reuniones, activas e inactivas, con totales generales y, por reunión, administrador, personas registradas, llamadas pendientes/finalizadas, intentos, invitaciones aceptadas, asistencias, registros en revisión y rechazados, y la actividad por usuario. API: `GET /api/v1/statistics/`.
+- Documentación de la API, API navegable, plantillas de WhatsApp, perfiles de operador y consulta de datos en `/admin/` (solo lectura para reuniones y sus datos).
 
 ### Interfaz web
 
@@ -265,7 +275,8 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 | Registrar resultados y contactos entrantes | No | No | Solo en la reunión activa |
 | Preparar WhatsApp y descargar QR vigentes | No | No | Solo en la reunión activa |
 | Crear cuentas, cambiar grupos o administrar datos globales | No | No | No; reservado al superusuario |
-| Exportar/importar asistencia offline o resolver conflictos | No | No | No; reservado al superusuario |
+| Exportar/importar asistencia offline o resolver conflictos | Solo en sus reuniones | No | No |
+| Ver estadísticas de todas las reuniones (solo lectura) | No | No | No; reservado al superusuario |
 
 **`ADMINISTRADOR`: responsable de sus reuniones.** Puede crear varias reuniones, cada una con un único administrador. Asigna y retira registradores/operadores existentes y consulta estadísticas de cada reunión: personas registradas, llamadas pendientes y finalizadas, intentos y aceptaciones, con desglose por usuario. No crea cuentas ni gestiona permisos globales, no registra personas y no atiende llamadas salvo que también tenga esos roles y esté asignado como miembro.
 
@@ -278,13 +289,13 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 - **Cuenta activa:** para iniciar sesión, la cuenta debe estar activa (`is_active`). Una cuenta sin grupos ni permisos adicionales puede autenticarse, pero no tiene acceso funcional a las operaciones protegidas.
 - **Grupos acumulables:** una cuenta puede pertenecer a varios grupos. Las funciones se suman únicamente en las reuniones donde tenga la asignación correspondiente: ser administrador de A y operador de B no permite operar A sin estar asignado como operador de A.
 - **Acceso al administrador Django:** `/admin/` queda reservado a cuentas activas con `is_staff` e `is_superuser`. La bandera `is_staff` por sí sola ya no abre esa interfaz, evitando el acceso global a datos mediante permisos de modelos.
-- **Superusuario:** no es un grupo. Crea cuentas, configura plantillas y corrige administradores/asignaciones de reuniones antiguas desde `/admin/`. Conserva acceso global de mantenimiento. Para operar una cola también necesita seleccionar una reunión habilitada y tener perfil de operador.
-- **Perfil de operador:** solicitar llamadas y emitir códigos requiere un `OperatorProfile` con iniciales únicas de dos letras mayúsculas, incluso para administradores y superusuarios. Tener un grupo o marcar `is_staff` no crea ese perfil.
+- **Superusuario:** no es un grupo. Solo gestiona cuentas y consulta estadísticas (ver [Superusuario: solo usuarios y estadísticas](#superusuario-solo-usuarios-y-estadísticas)); también configura plantillas. No tiene ningún rol operativo en reuniones, aunque se le asignen grupos.
+- **Perfil de operador:** solicitar llamadas y emitir códigos requiere un `OperatorProfile` con iniciales únicas de dos letras mayúsculas, incluso para administradores. Tener un grupo o marcar `is_staff` no crea ese perfil.
 - **Límites de las llamadas:** registrar el resultado de una tarea exige que esté asignada al usuario actual y que la asignación no haya vencido; ser administrador no omite ese control.
 - **Reunión activa:** web y Llamadas muestran el nombre de usuario, la reunión seleccionada y un selector de reuniones disponibles. No se selecciona ninguna silenciosamente. El servidor valida cada solicitud; manipular un identificador, conservar una pantalla abierta o usar un APK antiguo no evita los controles.
 - **Límites de WhatsApp:** requiere rol de operador en la reunión del participante, autorización de contacto y ausencia de «No volver a contactar». Las campañas quedan limitadas a la reunión activa; cada operador solo actualiza sus propios mensajes. No hay envío automático ni confirmación de entrega.
 - **Retirar miembros:** al retirar un operador se revoca su acceso y sus llamadas asignadas pendientes vuelven a la cola. El historial y las estadísticas se conservan. Las cuentas inactivas o sin el grupo correspondiente no pueden usar una asignación antigua.
-- **Interfaces:** tanto la web como Llamadas ofrecen gestión de reuniones (crear, editar, desactivar), asignaciones/estadísticas y registro en la cola según las capacidades del usuario y de la reunión activa. No incluyen creación de cuentas; el superusuario usa `/admin/` o el comando local.
+- **Interfaces:** tanto la web como Llamadas ofrecen gestión de reuniones (crear, editar, desactivar), asignaciones/estadísticas y registro en la cola según las capacidades del usuario y de la reunión activa. No incluyen creación de cuentas; el superusuario usa **Usuarios y grupos** o el comando local.
 - **Registro offline:** el grupo `REGISTRAR` del servidor no concede ni restringe por sí mismo el uso de EduMeeting Asistencia. Esa app trabaja con paquetes firmados y archivos locales; exportar paquetes e importar resultados en el servidor requiere los permisos indicados en la tabla.
 - **Migraciones:** al ejecutar `migrate`, se crean los tres grupos y se vuelve a establecer su conjunto de permisos predeterminado. Las modificaciones manuales a los permisos de esos grupos pueden sobrescribirse; para permisos adicionales persistentes, usa grupos propios o permisos individuales.
 
@@ -306,7 +317,7 @@ El administrador tiene dos tipos de vista:
 - **Desactivar** oculta la reunión a registradores y operadores (y la quita como reunión activa de quien la tenía seleccionada), pero conserva personas, llamadas, asignaciones e historial. **Activar** la vuelve a mostrar con sus asignaciones. Cada cambio se registra en la auditoría. Un administrador no puede ver ni modificar reuniones de otro administrador.
 - Selecciona la reunión y asigna registradores y operadores. En Llamadas pulsa **Consultar asignaciones y estadísticas**, marca las cuentas y guarda. Los registradores podrán agregar personas después.
 - Para actualizar una instalación existente, ejecuta `docker compose -f compose.yaml -f compose.local-https.yaml up --build -d web`: el arranque ejecuta las migraciones y redefine los permisos predeterminados. Sin HTTPS local, usa `docker compose up --build -d web`.
-- **Migración conservadora:** las reuniones anteriores conservan sus datos pero quedan sin administrador y no aparecen en las vistas operativas. El superusuario debe editar cada reunión en `/admin/`, seleccionar su administrador y asignar registradores/operadores. No se deducen asignaciones del creador ni se borran participantes, llamadas o historiales.
+- **Migración conservadora:** las reuniones anteriores conservan sus datos pero quedan sin administrador y no aparecen en las vistas operativas. Como `/admin/` es de solo lectura para reuniones, asignar un administrador a una reunión antigua requiere una corrección manual de mantenimiento (por ejemplo, `python manage.py shell`). No se deducen asignaciones del creador ni se borran participantes, llamadas o historiales.
 - Recompila e instala EduMeeting Llamadas con `docker compose -f compose.android.yaml run --rm llamadas`. Un APK anterior no contiene esta pantalla.
 
 - Las llamadas se asignan transaccionalmente, con vencimiento de diez minutos. Si no contestan, vuelven a estar disponibles después de quince minutos.
@@ -660,7 +671,7 @@ Al actualizar Asistencia, Room migra la base local a la versión 2 (columna del 
 
 ## Uso offline de EduMeeting Asistencia
 
-Estas operaciones las realiza el **administrador de la reunión** (el usuario del grupo ADMINISTRADOR que la creó) o un superusuario. En la web: **Gestionar reuniones → Asistencia offline** de cada reunión propia. Otros administradores, registradores y operadores reciben 403.
+Estas operaciones las realiza **solo el administrador de la reunión** (el usuario del grupo ADMINISTRADOR que la creó). En la web: **Gestionar reuniones → Asistencia offline** de cada reunión propia. Otros administradores, registradores, operadores y el superusuario reciben 403.
 
 En la app **EduMeeting Llamadas**, el administrador encuentra lo mismo en **Asignaciones y estadísticas → Asistencia offline** (con su reunión propia activa): definir el PIN, exportar el paquete `.attendance`, importar y combinar `.attendance-results` y resolver conflictos.
 
@@ -755,19 +766,20 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET /meetings/` | Listar reuniones activas accesibles (`meetings`) y, para administradores, todas sus reuniones incluidas las inactivas (`managed_meetings`, con `active` y `starts_at_local`). |
 | `POST /meetings/` | Crear una reunión vacía como ADMINISTRADOR (`number`, `name`, `starts_at`, `location` opcional); el creador queda como administrador único. |
 | `POST /meetings/{meeting_id}/` | Editar parcialmente una reunión propia (`number`, `name`, `starts_at`, `location`, `active` booleano). Las reuniones de otros administradores responden 404. |
-| `GET /session/` | Nombre de usuario, reunión activa y capacidades efectivas. |
+| `GET /session/` | Nombre de usuario, `is_superuser`, reunión activa y capacidades efectivas. |
 | `POST /meetings/select/` | Seleccionar una reunión accesible (`meeting_id`). |
 | `GET/POST /meetings/members/` | Consultar candidatos/asignaciones o guardar listas de IDs `registrars` y `operators`; solo el administrador de la reunión. |
 | `GET /meetings/statistics/` | Estadísticas de la reunión activa y actividad por usuario; solo su administrador. |
+| `GET /statistics/` | Estadísticas de solo lectura de todas las reuniones (`totals` y `meetings`); solo el superusuario. |
 | `POST /participants/` | Registrar `full_name`, `phone`, `contact_authorized` y crear tarea en la reunión activa; solo registradores asignados. |
-| `GET/PUT /meetings/{meeting_id}/attendance-pin/` | Consultar si hay PIN (`configured`) o definirlo (`pin`, 6 a 8 dígitos; también acepta POST); solo el administrador de la reunión o un superusuario. |
-| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado (requiere PIN definido); solo el administrador de la reunión o un superusuario. |
+| `GET/PUT /meetings/{meeting_id}/attendance-pin/` | Consultar si hay PIN (`configured`) o definirlo (`pin`, 6 a 8 dígitos; también acepta POST); solo el administrador de la reunión. |
+| `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado (requiere PIN definido); solo el administrador de la reunión. |
 | `GET /codes/{code_id}/qr/` | Descargar el QR PNG de un código vigente. |
-| `POST /attendance/import/` | Importar un archivo de resultados offline de reuniones propias (administrador o superusuario); `by_operator` indica cuántos registros aportó cada persona. |
+| `POST /attendance/import/` | Importar un archivo de resultados offline de reuniones propias (solo su administrador); `by_operator` indica cuántos registros aportó cada persona. |
 | `POST /attendance/import/preview/` | Simular la importación de hasta 20 archivos (campo multipart `file` repetido) sin guardar nada: por archivo y en total, registros nuevos, duplicados, conflictos, registros por persona o el error; mismos permisos que la importación. |
 | `GET /attendance/report/{meeting_id}/` | Consultar totales de la reunión. |
-| `GET /meetings/{meeting_id}/conflicts/` | Listar conflictos pendientes de una reunión propia (administrador o superusuario). |
-| `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión o un superusuario. |
+| `GET /meetings/{meeting_id}/conflicts/` | Listar conflictos pendientes de una reunión propia (solo su administrador). |
+| `POST /attendance/conflicts/{id}/resolve/` | Resolver un conflicto conservando los registros; solo el administrador de la reunión. |
 | `GET /attendance/stream/` | Recibir eventos SSE publicados después del commit. |
 
 Sin Docker, ejecuta desde la carpeta del servidor:

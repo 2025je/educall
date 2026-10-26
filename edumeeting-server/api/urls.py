@@ -15,6 +15,7 @@ urlpatterns = [
     path("exports/<uuid:job_id>/", PackageExportStatusView.as_view(), name="package-export-status"),
     path("exports/<uuid:job_id>/download/", PackageExportDownloadView.as_view(), name="package-export-download"),
     path("session/", views.SessionContextView.as_view(), name="session-context"),
+    path("statistics/", views.GlobalStatisticsView.as_view(), name="global-statistics"),
     path("meetings/", views.MeetingListView.as_view(), name="meetings"),
     path("meetings/select/", views.SelectMeetingView.as_view(), name="api-select-meeting"),
     path("meetings/members/", views.MeetingMembersView.as_view(), name="api-meeting-members"),

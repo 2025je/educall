@@ -54,7 +54,7 @@ REQUESTS = {
 }
 RESPONSES = {
     "SessionContextView": obj(
-        "SessionContext", username=text(), meeting=MEETING_REF,
+        "SessionContext", username=text(), is_superuser=boolean(), meeting=MEETING_REF,
         can_create=boolean(), can_manage=boolean(), can_register=boolean(), can_operate=boolean(),
     ),
     "MeetingMembersView": obj(
@@ -66,6 +66,21 @@ RESPONSES = {
         "MeetingStatistics", meeting_id=text(), meeting_name=text(), registered=integer(), pending_calls=integer(),
         completed_calls=integer(), call_attempts=integer(), accepted=integer(),
         users=array(obj("UserStatistics", id=integer(), username=text(), registered=integer(), call_attempts=integer(), accepted=integer())),
+    ),
+    "GlobalStatisticsView": obj(
+        "GlobalStatistics",
+        totals=obj(
+            "GlobalStatisticsTotals", meetings=integer(), active_meetings=integer(), registered=integer(),
+            pending_calls=integer(), completed_calls=integer(), call_attempts=integer(), accepted=integer(),
+            attendance=integer(), pending_review=integer(), rejected=integer(),
+        ),
+        meetings=array(obj(
+            "MeetingOverview", meeting_id=text(), meeting_name=text(), number=integer(),
+            starts_at=serializers.DateTimeField(), active=boolean(), administrator=text(allow_null=True),
+            registered=integer(), pending_calls=integer(), completed_calls=integer(), call_attempts=integer(),
+            accepted=integer(), attendance=integer(), pending_review=integer(), rejected=integer(),
+            users=array(obj("OverviewUserStatistics", id=integer(), username=text(), registered=integer(), call_attempts=integer(), accepted=integer())),
+        )),
     ),
     "MeetingDetailView": obj("MeetingResult", meeting=s.MeetingSerializer()),
     "RegisterParticipantView": obj("RegisteredParticipant", id=serializers.UUIDField(), ok=boolean()),

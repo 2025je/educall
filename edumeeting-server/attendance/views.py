@@ -14,7 +14,7 @@ from django.views.generic import FormView, UpdateView
 from .access import has_role, managed_meetings
 from .forms import MeetingCreationForm, MeetingEditForm, UserManagementForm
 from .models import AuditEvent
-from .workspace import record_meeting_update, workspace_context
+from .workspace import global_statistics, record_meeting_update, workspace_context
 
 
 class SuperuserRequiredMixin(LoginRequiredMixin, UserPassesTestMixin):
@@ -89,6 +89,16 @@ class UserToggleView(SuperuserRequiredMixin, View):
             )
         messages.success(request, "Usuario activado." if account.is_active else "Usuario desactivado.")
         return redirect("user-list")
+
+
+class StatisticsView(SuperuserRequiredMixin, View):
+    http_method_names = ["get"]
+    permission_denied_message = "Solo el superusuario puede ver las estadísticas globales."
+
+    def get(self, request):
+        return render(request, "attendance/statistics.html", {
+            **workspace_context(request), "statistics": global_statistics(),
+        })
 
 
 def _managed_meeting(user, meeting_id):

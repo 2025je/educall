@@ -137,7 +137,7 @@ class OfflineAttendanceAdministrationTests(TestCase):
         import_attendance_results(self.archive(device="tel-2"), self.owner)
         conflict = AttendanceConflict.objects.get()
         resolve_url = reverse("offline-resolve", args=[self.meeting.pk, conflict.pk])
-        for user in (self.other_admin, self.operator, self.registrar):
+        for user in (self.other_admin, self.operator, self.registrar, self.root):
             self.client.force_login(user)
             self.assertEqual(self.client.get(self.page).status_code, 403)
             self.assertEqual(self.client.post(self.import_url, {"file": self.archive()}).status_code, 403)
@@ -175,7 +175,9 @@ class OfflineAttendanceAdministrationTests(TestCase):
             self.assertEqual(self.client.post(reverse("package-export-create", args=[self.meeting.pk])).status_code, 202)
             self.assertEqual(self.client.post(reverse("package-export-create", args=[self.foreign.pk])).status_code, 403)
         self.client.force_login(self.root)
-        self.assertEqual(self.client.get(reverse("offline-attendance", args=[self.foreign.pk])).status_code, 200)
+        for meeting in (self.meeting, self.foreign):
+            self.assertEqual(self.client.get(reverse("offline-attendance", args=[meeting.pk])).status_code, 403)
+            self.assertEqual(self.client.get(reverse("meeting-conflicts", args=[meeting.pk])).status_code, 403)
 
     def test_cross_meeting_export_by_admin_excludes_other_admins_participants(self):
         stranger = Participant.objects.create(full_name="Externo", phone="5215500000000", origin_meeting=self.foreign)
@@ -185,8 +187,8 @@ class OfflineAttendanceAdministrationTests(TestCase):
         with signing_settings():
             package, _contents = export_attendance_package(self.meeting.pk, self.owner)
             self.assertEqual(list(package.participants.values_list("participant_id", flat=True)), [self.participant.pk])
-            full, _contents = export_attendance_package(self.meeting.pk, self.root)
-            self.assertEqual(full.participants.count(), 2)
+            with self.assertRaises(PermissionDenied):
+                export_attendance_package(self.meeting.pk, self.root)
             with self.assertRaises(PermissionDenied):
                 export_attendance_package(self.foreign.pk, self.owner)
 

@@ -13,13 +13,12 @@ def role_label(name):
 
 
 def has_role(user, role):
-    return user.is_active and (user.is_superuser or user.groups.filter(name=role).exists())
+    """Operational roles come only from groups; the superuser never operates meetings."""
+    return user.is_active and not user.is_superuser and user.groups.filter(name=role).exists()
 
 
 def accessible_meetings(user):
     meetings = Meeting.objects.filter(active=True, administrator__isnull=False)
-    if user.is_superuser and user.is_active:
-        return meetings
     scope = Q(pk__in=[])
     if has_role(user, "ADMINISTRADOR"):
         scope |= Q(administrator=user)
@@ -34,16 +33,13 @@ def managed_meetings(user):
     """Meetings the user may create/edit/deactivate, including inactive ones."""
     if not has_role(user, "ADMINISTRADOR"):
         return Meeting.objects.none()
-    meetings = Meeting.objects.order_by("-active", "number")
-    return meetings if user.is_superuser else meetings.filter(administrator=user)
+    return Meeting.objects.order_by("-active", "number").filter(administrator=user)
 
 
 def require_meeting_administration(user, meeting):
-    """Offline attendance operations: superuser or the meeting's own administrator, even if inactive."""
+    """Offline attendance operations: only the meeting's own administrator, even if inactive."""
     if not user.is_active:
         raise PermissionDenied("La cuenta no está activa.")
-    if user.is_superuser:
-        return
     if not (has_role(user, "ADMINISTRADOR") and meeting.administrator_id == user.pk):
         raise PermissionDenied("Solo el administrador de esta reunión puede gestionar su asistencia offline.")
 
@@ -51,8 +47,6 @@ def require_meeting_administration(user, meeting):
 def require_meeting_role(user, meeting, role):
     if not user.is_active or not meeting.active or not meeting.administrator_id:
         raise PermissionDenied("La reunión no está activa o está pendiente de asignación.")
-    if user.is_superuser:
-        return
     allowed = has_role(user, role)
     if role == "ADMINISTRADOR":
         allowed = allowed and meeting.administrator_id == user.pk
