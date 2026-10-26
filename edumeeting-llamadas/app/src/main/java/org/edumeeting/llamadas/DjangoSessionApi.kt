@@ -110,11 +110,15 @@ class DjangoSessionApi internal constructor(baseUrl: String, clientBuilder: OkHt
     fun post(path: String, body: JSONObject): JSONObject =
         request(path, body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
 
-    fun upload(path: String, fileName: String, contents: ByteArray): JSONObject = request(
+    fun upload(path: String, fileName: String, contents: ByteArray): JSONObject = uploadAll(path, listOf(fileName to contents))
+
+    fun uploadAll(path: String, files: List<Pair<String, ByteArray>>): JSONObject = request(
         path,
-        MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", fileName, contents.toRequestBody("application/zip".toMediaType()))
-            .build(),
+        MultipartBody.Builder().setType(MultipartBody.FORM).apply {
+            files.forEach { (fileName, contents) ->
+                addFormDataPart("file", fileName, contents.toRequestBody("application/zip".toMediaType()))
+            }
+        }.build(),
     )
 
     fun download(path: String): ByteArray {

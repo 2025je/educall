@@ -787,3 +787,50 @@ def import_attendance_results(uploaded_file, user, expected_meeting=None):
         "export_id": str(export_id), "created": created, "duplicates": duplicates, "conflicts": conflicts,
         "by_operator": by_operator,
     }
+
+
+class _PreviewRollback(Exception):
+    pass
+
+
+def preview_attendance_results(uploaded_files, user, expected_meeting=None):
+    """Simula la importación de varios archivos en orden y revierte todo.
+
+    Los archivos se importan uno tras otro dentro de una transacción que se deshace al final, así
+    los duplicados y conflictos entre archivos se cuentan igual que en la importación real.
+    """
+    files = []
+    totals = {"created": 0, "duplicates": 0, "conflicts": 0, "by_operator": {}}
+    try:
+        with transaction.atomic():
+            for uploaded_file in uploaded_files:
+                name = getattr(uploaded_file, "name", "") or "resultados"
+                try:
+                    with transaction.atomic():
+                        report = import_attendance_results(uploaded_file, user, expected_meeting=expected_meeting)
+                except (ValidationError, PermissionDenied, Meeting.DoesNotExist, Participant.DoesNotExist) as exc:
+                    if isinstance(exc, ValidationError):
+                        message = "; ".join(exc.messages)
+                    elif isinstance(exc, PermissionDenied):
+                        message = "No administras la reunión de este archivo."
+                    else:
+                        message = "El archivo menciona datos que no existen en el servidor."
+                    files.append({"name": name, "error": message or "No se pudo leer el archivo."})
+                    continue
+                summary = {
+                    "name": name,
+                    "error": None,
+                    "created": len(report["created"]),
+                    "duplicates": len(report["duplicates"]),
+                    "conflicts": len(report["conflicts"]),
+                    "by_operator": report["by_operator"],
+                }
+                files.append(summary)
+                for key in ("created", "duplicates", "conflicts"):
+                    totals[key] += summary[key]
+                for label, count in report["by_operator"].items():
+                    totals["by_operator"][label] = totals["by_operator"].get(label, 0) + count
+            raise _PreviewRollback
+    except _PreviewRollback:
+        pass
+    return {"dry_run": True, "files": files, "totals": totals}

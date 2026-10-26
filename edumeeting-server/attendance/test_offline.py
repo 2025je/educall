@@ -297,3 +297,55 @@ class OfflineAttendanceAdministrationTests(TestCase):
         self.client.force_login(self.owner)
         response = self.client.post(reverse("import-results"), {"file": self.archive(operator="Lucía")})
         self.assertEqual(response.json()["by_operator"], {"Lucía": 1})
+
+    def test_preview_counts_cross_file_conflicts_without_saving(self):
+        self.client.force_login(self.owner)
+        already = self.archive(device="tel-0", operator="Ana")
+        self.client.post(reverse("import-results"), {"file": already})
+        records_before = AttendanceRecord.objects.count()
+        repeated = self.archive(device="tel-0", operator="Ana")
+        repeated_payload = json.loads(zipfile.ZipFile(repeated).read("results.json"))
+        repeated_payload["records"][0]["id"] = AttendanceRecord.objects.get().pk.hex
+        duplicate_file = io.BytesIO()
+        with zipfile.ZipFile(duplicate_file, "w") as bundle:
+            bundle.writestr("results.json", json.dumps(repeated_payload))
+        duplicate_file.seek(0)
+        duplicate_file.name = "ana.attendance-results"
+        broken = io.BytesIO(b"x")
+        broken.name = "roto.attendance-results"
+        files = [
+            duplicate_file,
+            self.archive(device="tel-1", operator="Lucía", name="lucia.attendance-results"),
+            self.archive(device="tel-2", operator="Marcos", name="marcos.attendance-results"),
+            broken,
+        ]
+        with self.captureOnCommitCallbacks() as callbacks:
+            response = self.client.post(reverse("import-preview"), {"file": files})
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual([item["name"] for item in preview["files"]], [
+            "ana.attendance-results", "lucia.attendance-results", "marcos.attendance-results", "roto.attendance-results",
+        ])
+        self.assertEqual(preview["files"][0]["duplicates"], 1)
+        self.assertEqual(preview["files"][1]["conflicts"], 1)
+        self.assertEqual(preview["files"][2]["conflicts"], 2)
+        self.assertIn("ZIP", preview["files"][3]["error"])
+        self.assertEqual(preview["totals"], {
+            "created": 2, "duplicates": 1, "conflicts": 3, "by_operator": {"Ana": 1, "Lucía": 1, "Marcos": 1},
+        })
+        self.assertEqual(AttendanceRecord.objects.count(), records_before)
+        self.assertFalse(AttendanceConflict.objects.exists())
+        self.assertEqual(AttendanceRecord.objects.get().status, AttendanceRecord.Status.ACCEPTED)
+        self.assertEqual(callbacks, [])
+
+    def test_preview_is_limited_to_meeting_administrators(self):
+        for user in (self.operator, self.registrar):
+            self.client.force_login(user)
+            self.assertEqual(self.client.post(reverse("import-preview"), {"file": self.archive()}).status_code, 403)
+        self.client.force_login(self.other_admin)
+        foreign = self.client.post(reverse("import-preview"), {"file": self.archive()}).json()
+        self.assertEqual(foreign["files"][0]["error"], "No administras la reunión de este archivo.")
+        self.assertEqual(foreign["totals"]["created"], 0)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.post(reverse("import-preview"), {}).status_code, 400)

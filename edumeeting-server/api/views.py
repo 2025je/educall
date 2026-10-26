@@ -42,6 +42,7 @@ from attendance.services import (
     import_attendance_results,
     prepare_message_campaign,
     prepare_whatsapp_message,
+    preview_attendance_results,
     record_call_outcome,
     record_inbound_call,
     require_attendance_pin,
@@ -364,6 +365,24 @@ class ImportResultsView(APIView):
         except (Meeting.DoesNotExist, Participant.DoesNotExist) as exc:
             raise ValidationError(str(exc))
         return Response(report)
+
+
+MAX_PREVIEW_FILES = 20
+
+
+class ImportPreviewView(APIView):
+    """Calcula qué ocurriría al importar los archivos, sin guardar nada."""
+
+    permission_classes = (IsAuthenticated, IsAttendanceAdministrator)
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        uploads = request.FILES.getlist("file")
+        if not uploads:
+            raise ValidationError("Falta el archivo de resultados.")
+        if len(uploads) > MAX_PREVIEW_FILES:
+            raise ValidationError(f"Revisa como máximo {MAX_PREVIEW_FILES} archivos a la vez.")
+        return Response(preview_attendance_results(uploads, request.user))
 
 
 class MeetingAttendancePinView(APIView):

@@ -33,6 +33,7 @@ urlpatterns = [
     path("mobile/logout/", views.MobileLogoutView.as_view(), name="mobile-logout"),
     path("codes/<uuid:code_id>/qr/", views.AttendanceQrView.as_view(), name="attendance-qr"),
     path("attendance/import/", views.ImportResultsView.as_view(), name="import-results"),
+    path("attendance/import/preview/", views.ImportPreviewView.as_view(), name="import-preview"),
     path("attendance/conflicts/<int:conflict_id>/resolve/", views.ResolveConflictView.as_view(), name="resolve-conflict"),
     path("meetings/<uuid:meeting_id>/conflicts/", views.MeetingConflictListView.as_view(), name="meeting-conflicts"),
     path("meetings/<uuid:meeting_id>/attendance-pin/", views.MeetingAttendancePinView.as_view(), name="meeting-attendance-pin"),

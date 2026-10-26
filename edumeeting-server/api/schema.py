@@ -49,6 +49,7 @@ REQUESTS = {
     "MessageStatusView": s.MessageStatusSerializer,
     "ResolveConflictView": s.ResolveConflictSerializer,
     "ImportResultsView": obj("ResultsUpload", file=serializers.FileField()),
+    "ImportPreviewView": obj("ResultsPreviewUpload", file=array(serializers.FileField())),
     "MeetingAttendancePinView": obj("AttendancePinUpdate", pin=text(min_length=6, max_length=8)),
 }
 RESPONSES = {
@@ -83,6 +84,17 @@ RESPONSES = {
         by_operator=serializers.DictField(child=integer()),
     ),
     "MeetingAttendancePinView": obj("AttendancePinStatus", configured=boolean()),
+    "ImportPreviewView": obj(
+        "ImportPreview", dry_run=boolean(),
+        files=array(obj(
+            "ImportPreviewFile", name=text(), error=text(allow_null=True), created=integer(), duplicates=integer(),
+            conflicts=integer(), by_operator=serializers.DictField(child=integer()),
+        )),
+        totals=obj(
+            "ImportPreviewTotals", created=integer(), duplicates=integer(), conflicts=integer(),
+            by_operator=serializers.DictField(child=integer()),
+        ),
+    ),
     "ResolveConflictView": obj("ResolvedConflict", ok=boolean(), conflict_id=integer(), resolved_record_id=text()),
     "MeetingConflictListView": obj("PendingConflicts", conflicts=array(obj(
         "PendingConflict", id=integer(), participant_name=text(),

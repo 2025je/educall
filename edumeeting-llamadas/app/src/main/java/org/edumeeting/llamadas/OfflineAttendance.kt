@@ -1,11 +1,15 @@
 package org.edumeeting.llamadas
 
 import org.edumeeting.ui.*
+import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -38,6 +42,62 @@ internal class OfflineAttendanceState {
     var pinConfigured by mutableStateOf<Boolean?>(null)
     var pin by mutableStateOf("")
     var pinConfirmation by mutableStateOf("")
+    var pendingImport by mutableStateOf<PendingImport?>(null)
+}
+
+internal class ResultFile(val name: String, val contents: ByteArray)
+
+internal class PendingImport(val files: List<ResultFile>, val preview: JSONObject)
+
+private fun readResultFile(context: Context, uri: Uri, index: Int): ResultFile {
+    val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }
+    val contents = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        ?: throw IllegalStateException("No se pudo leer el archivo ${index + 1}.")
+    return ResultFile(displayName?.takeIf { it.isNotBlank() } ?: "resultados-${index + 1}.attendance-results", contents)
+}
+
+@Composable
+private fun ImportPreviewDialog(preview: JSONObject, busy: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val totals = preview.getJSONObject("totals")
+    val files = preview.getJSONArray("files")
+    val valid = (0 until files.length()).count { files.getJSONObject(it).isNull("error") }
+    val people = totals.getJSONObject("by_operator").let { byOperator ->
+        byOperator.keys().asSequence().sorted().map { "$it (${byOperator.getInt(it)})" }.toList()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Info, contentDescription = null) },
+        title = { Text("Revisar antes de importar") },
+        text = {
+            Column(
+                Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Esto pasará al combinar $valid de ${files.length()} archivos. Todavía no se guardó nada.")
+                Text("• ${totals.getInt("created")} registros nuevos")
+                Text("• ${totals.getInt("duplicates")} ya importados (se omiten)")
+                Text("• ${totals.getInt("conflicts")} conflictos por resolver")
+                if (people.isNotEmpty()) Text("Registrado por: ${people.joinToString()}")
+                for (index in 0 until files.length()) {
+                    val file = files.getJSONObject(index)
+                    if (!file.isNull("error")) {
+                        Admonition(AdmonitionKind.Danger, file.getString("name")) { Text(file.getString("error")) }
+                    }
+                }
+                if (totals.getInt("conflicts") > 0) {
+                    Admonition(AdmonitionKind.Warning, "Habrá conflictos") {
+                        Text("Después de importar, resuélvelos en el paso 4.")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(enabled = !busy && valid > 0, onClick = onConfirm) { Text("Importar $valid") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 private const val MAX_EXPORT_POLLS = 90
@@ -81,6 +141,39 @@ internal fun OfflineAttendanceSection(
         }
     }
 
+    suspend fun importFiles(files: List<ResultFile>) {
+        var imported = 0
+        var created = 0
+        var duplicates = 0
+        var newConflicts = 0
+        val people = sortedMapOf<String, Int>()
+        val failures = mutableListOf<String>()
+        files.forEach { file ->
+            // Cada archivo se importa por separado: uno inválido no impide combinar los demás.
+            try {
+                val report = withContext(Dispatchers.IO) { api.upload("/api/v1/attendance/import/", file.name, file.contents) }
+                imported++
+                created += report.getJSONArray("created").length()
+                duplicates += report.getJSONArray("duplicates").length()
+                newConflicts += report.getJSONArray("conflicts").length()
+                report.optJSONObject("by_operator")?.let { byOperator ->
+                    byOperator.keys().forEach { name -> people[name] = (people[name] ?: 0) + byOperator.getInt(name) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                failures += "${file.name}: ${error.message ?: "no se pudo importar"}"
+            }
+        }
+        loadConflicts()
+        val summary = buildString {
+            append("Se combinaron $imported de ${files.size} archivos: $created nuevos, $duplicates ya importados y $newConflicts conflictos nuevos.")
+            if (people.isNotEmpty()) append(" Registrado por: ${people.entries.joinToString { "${it.key} (${it.value})" }}.")
+            if (failures.isNotEmpty()) append(" ${failures.joinToString(" ")}")
+        }
+        onNotice(summary)
+    }
+
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         if (uris.size > MAX_RESULT_FILES) {
@@ -88,45 +181,28 @@ internal fun OfflineAttendanceSection(
             return@rememberLauncherForActivityResult
         }
         runRequest {
-            var imported = 0
-            var created = 0
-            var duplicates = 0
-            var newConflicts = 0
-            val people = sortedMapOf<String, Int>()
-            val failures = mutableListOf<String>()
-            uris.forEachIndexed { index, uri ->
-                // Cada archivo se importa por separado: uno inválido no impide combinar los demás.
-                try {
-                    val contents = withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                            ?: throw IllegalStateException("No se pudo leer el archivo.")
-                    }
-                    val report = withContext(Dispatchers.IO) {
-                        api.upload("/api/v1/attendance/import/", "resultados-${index + 1}.attendance-results", contents)
-                    }
-                    imported++
-                    created += report.getJSONArray("created").length()
-                    duplicates += report.getJSONArray("duplicates").length()
-                    newConflicts += report.getJSONArray("conflicts").length()
-                    report.optJSONObject("by_operator")?.let { byOperator ->
-                        byOperator.keys().forEach { name -> people[name] = (people[name] ?: 0) + byOperator.getInt(name) }
-                    }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    failures += "Archivo ${index + 1}: ${error.message ?: "no se pudo importar"}"
-                }
+            val files = withContext(Dispatchers.IO) {
+                uris.mapIndexed { index, uri -> readResultFile(context, uri, index) }
             }
-            loadConflicts()
-            val summary = buildString {
-                append("Se combinaron $imported de ${uris.size} archivos: $created nuevos, $duplicates ya importados y $newConflicts conflictos nuevos.")
-                if (people.isNotEmpty()) append(" Registrado por: ${people.entries.joinToString { "${it.key} (${it.value})" }}.")
-                if (failures.isNotEmpty()) append(" ${failures.joinToString(" ")}")
-            }
-            onNotice(summary)
+            val preview = withContext(Dispatchers.IO) { api.uploadAll("/api/v1/attendance/import/preview/", files.map { it.name to it.contents }) }
+            pendingImport = PendingImport(files, preview)
         }
     }
 
+    pendingImport?.let { pending ->
+        ImportPreviewDialog(
+            pending.preview,
+            busy = busy,
+            onDismiss = {
+                pendingImport = null
+                onNotice("Importación cancelada: no se guardó ningún registro.")
+            },
+            onConfirm = {
+                pendingImport = null
+                runRequest { importFiles(pending.files) }
+            },
+        )
+    }
     LaunchedEffect(meetingId) {
         pinConfigured = null
         val id = meetingId ?: return@LaunchedEffect
@@ -224,6 +300,7 @@ internal fun OfflineAttendanceSection(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("3. Importar y combinar resultados", style = MaterialTheme.typography.titleMedium)
             Text("Elige a la vez los archivos .attendance-results de todos los teléfonos (hasta $MAX_RESULT_FILES). Se combinan en la reunión; reimportarlos no duplica registros.")
+            Text("Antes de guardar verás un resumen con los registros nuevos, los ya importados, los conflictos y quién registró cada uno.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { importLauncher.launch(arrayOf("*/*")) }) {
                 ActionLabel("Importar resultados", Icons.AutoMirrored.Filled.Send)
             }
