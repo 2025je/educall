@@ -1,0 +1,19 @@
+# Finales de línea LF en el repositorio y en la copia de trabajo, sin importar core.autocrlf.
+# Los scripts .sh, Dockerfile y archivos de CI se ejecutan en Linux y requieren LF.
+* text=auto eol=lf
+
+# Binarios: Git no debe tocarlos.
+*.apk binary
+*.aab binary
+*.jar binary
+*.keystore binary
+*.jks binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.sqlite3 binary

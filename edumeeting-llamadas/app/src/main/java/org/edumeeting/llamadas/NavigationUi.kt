@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import org.edumeeting.ui.ActionLabel
+import org.edumeeting.ui.GridCard
 
 internal enum class DialDestination(val title: String, val icon: ImageVector, val description: String) {
     Home("Inicio", Icons.Default.Home, "Tu espacio de trabajo"),
@@ -24,29 +26,6 @@ internal enum class DialDestination(val title: String, val icon: ImageVector, va
     Register("Registrar", Icons.Default.Person, "Agrega una persona a la reunión activa"),
     Assignments("Asignaciones y estadísticas", Icons.AutoMirrored.Filled.List, "Organiza tu equipo y consulta el progreso"),
     Manage("Gestionar reuniones", Icons.Default.Edit, "Crea y actualiza tus reuniones"),
-}
-
-@Composable
-internal fun ActionLabel(text: String, icon: ImageVector) {
-    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
-    Spacer(Modifier.width(8.dp))
-    Text(text)
-}
-
-@Composable
-internal fun EmptyState(icon: ImageVector, title: String, description: String, action: @Composable () -> Unit = {}) {
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 24.dp, horizontal = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) {
-            Icon(icon, null, Modifier.padding(20.dp).size(40.dp), tint = MaterialTheme.colorScheme.primary)
-        }
-        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        action()
-    }
 }
 
 @Composable
@@ -76,27 +55,14 @@ internal fun WorkspaceHome(
         destinations.filter { it != DialDestination.Home }.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
                 row.forEach { destination ->
-                    OutlinedCard(
+                    GridCard(
+                        icon = destination.icon,
+                        title = destination.title,
+                        description = destination.description,
+                        action = "Abrir",
                         onClick = { navigate(destination) },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)) {
-                                    Icon(destination.icon, null, Modifier.padding(6.dp).size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                }
-                                Text(destination.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                            }
-                            HorizontalDivider()
-                            Text(destination.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                Text("Abrir", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+                    )
                 }
                 if (row.size == 1) Spacer(Modifier.weight(1f))
             }
@@ -142,17 +108,6 @@ internal fun OutcomeGrid(options: List<Pair<String, String>>, enabled: Boolean, 
                 }
                 if (row.size == 1) Spacer(Modifier.weight(1f))
             }
-        }
-    }
-}
-
-@Composable
-internal fun StatTile(label: String, value: Int, icon: ImageVector, modifier: Modifier = Modifier) {
-    OutlinedCard(modifier) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-            Text(value.toString(), style = MaterialTheme.typography.headlineLarge)
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -1,5 +1,6 @@
 package org.edumeeting.llamadas
 
+import org.edumeeting.ui.*
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -7,7 +8,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -156,33 +156,21 @@ private fun DialScreen() {
     var editingMeetingId by remember { mutableStateOf<String?>(null) }
     val preferences = remember { DialPreferences(context) }
     var preferencesLoaded by remember { mutableStateOf(false) }
-    val systemDark = isSystemInDarkTheme()
-    var darkMode by remember { mutableStateOf(systemDark) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(preferences) {
         try {
-            val settings = preferences.load()
-            darkMode = settings.darkMode ?: systemDark
-            serverUrl = settings.serverUrl
+            serverUrl = preferences.load().serverUrl
+            preferences.legacyDarkMode()?.let { dark ->
+                ThemePreferences(context).adoptLegacy(if (dark) ThemeMode.Dark else ThemeMode.Light)
+                preferences.clearLegacyDarkMode()
+            }
         } catch (error: IOException) {
             notice = "No se pudieron leer las preferencias: ${error.message}"
             snackbarHostState.showNotice(notice, AdmonitionKind.Danger)
         } finally {
             preferencesLoaded = true
-        }
-    }
-
-    fun setDarkMode(enabled: Boolean) {
-        if (!preferencesLoaded) return
-        scope.launch {
-            try {
-                preferences.setDarkMode(enabled)
-                darkMode = enabled
-            } catch (error: IOException) {
-                snackbarHostState.showNotice("No se pudo guardar el tema: ${error.message}", AdmonitionKind.Danger)
-            }
         }
     }
 
@@ -388,7 +376,7 @@ private fun DialScreen() {
         }
     }
 
-    DialTheme(dark = darkMode) {
+    EduMeetingTheme { theme ->
         ModalNavigationDrawer(
             drawerState = drawerState,
             gesturesEnabled = api != null,
@@ -416,11 +404,32 @@ private fun DialScreen() {
                             )
                         }
                         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Settings, null)
-                            Text("Modo oscuro", Modifier.weight(1f).padding(start = 12.dp))
-                            Switch(checked = darkMode, onCheckedChange = ::setDarkMode)
-                        }
+                        Text(
+                            "Apariencia",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
+                        NavigationDrawerItem(
+                            label = { Text(if (theme.dark) "Tema claro" else "Tema oscuro") },
+                            icon = { ThemeGlyph(theme.dark) },
+                            selected = false,
+                            shape = RoundedCornerShape(12.dp),
+                            onClick = theme.toggle,
+                        )
+                        NavigationDrawerItem(
+                            label = { Text("Tema según el sistema", fontWeight = if (theme.followsSystem) FontWeight.Bold else FontWeight.Normal) },
+                            icon = { Icon(Icons.Default.Settings, null) },
+                            selected = theme.followsSystem,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = NavigationDrawerItemDefaults.colors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedContainerColor = MaterialTheme.colorScheme.surface,
+                            ),
+                            onClick = theme.followSystem,
+                        )
                         if (api != null) NavigationDrawerItem(
                             label = { Text("Cerrar sesión") },
                             icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) },
@@ -452,8 +461,8 @@ private fun DialScreen() {
                                 }
                             },
                             actions = {
-                                IconButton(onClick = { setDarkMode(!darkMode) }) {
-                                    Icon(Icons.Default.Settings, if (darkMode) "Activar modo claro" else "Activar modo oscuro")
+                                IconButton(onClick = theme.toggle) {
+                                    ThemeGlyph(theme.dark, if (theme.dark) "Activar tema claro" else "Activar tema oscuro")
                                 }
                             },
                             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface, titleContentColor = MaterialTheme.colorScheme.onSurface),
@@ -529,7 +538,11 @@ private fun DialScreen() {
                                     Text("Usa HTTPS con certificado válido. Las credenciales no se guardan en el dispositivo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            TextButton(onClick = { setDarkMode(!darkMode) }) { ActionLabel(if (darkMode) "Modo claro" else "Modo oscuro", Icons.Default.Settings) }
+                            TextButton(onClick = theme.toggle) {
+                                ThemeGlyph(theme.dark)
+                                Spacer(Modifier.width(8.dp))
+                                Text(if (theme.dark) "Tema claro" else "Tema oscuro")
+                            }
                         }
                     }
                 } else key(destination) {
@@ -559,9 +572,14 @@ private fun DialScreen() {
                                     OutlinedButton(enabled = !busy, onClick = ::refreshSession, modifier = Modifier.padding(top = 12.dp)) { ActionLabel("Actualizar", Icons.Default.Refresh) }
                                 }
                                 if (meetingList.isEmpty()) item {
-                                    EmptyState(Icons.Default.DateRange, "Sin reuniones disponibles", "Solicita una asignación o crea una reunión si eres administrador.") {
-                                        if (canCreateMeetings) Button(onClick = { destination = DialDestination.Manage }) { ActionLabel("Crear reunión", Icons.Default.Add) }
-                                    }
+                                    EmptyState(
+                                        Icons.Default.DateRange,
+                                        "Sin reuniones disponibles",
+                                        "Solicita una asignación o crea una reunión si eres administrador.",
+                                        actionLabel = if (canCreateMeetings) "Crear reunión" else null,
+                                        actionIcon = Icons.Default.Add,
+                                        onAction = { destination = DialDestination.Manage },
+                                    )
                                 }
                                 items(meetingList, key = { it.first }) { (id, label) ->
                                     val selected = id == activeMeetingId
@@ -689,9 +707,14 @@ private fun DialScreen() {
                                 }
                             }
                             DialDestination.Register, DialDestination.Assignments -> item {
-                                if (activeMeetingId == null) EmptyState(Icons.Default.DateRange, "Selecciona una reunión", "Elige una reunión antes de continuar.") {
-                                    Button(onClick = { destination = DialDestination.Meetings }) { ActionLabel("Ver reuniones", Icons.Default.DateRange) }
-                                } else key(activeMeetingId) {
+                                if (activeMeetingId == null) EmptyState(
+                                    Icons.Default.DateRange,
+                                    "Selecciona una reunión",
+                                    "Elige una reunión antes de continuar.",
+                                    actionLabel = "Ver reuniones",
+                                    actionIcon = Icons.Default.DateRange,
+                                    onAction = { destination = DialDestination.Meetings },
+                                ) else key(activeMeetingId) {
                                     RoleWorkspace(
                                         api = api!!, canManage = canManage && destination == DialDestination.Assignments,
                                         canRegister = canRegister && destination == DialDestination.Register,
@@ -709,9 +732,11 @@ private fun DialScreen() {
                                         Icons.Default.Call,
                                         if (callQueueEmpty) "No hay llamadas disponibles" else "Listo para llamar",
                                         if (callQueueEmpty) "La cola está vacía por ahora. Puedes volver a consultar." else "Solicita una llamada y registra el resultado al terminar.",
-                                    ) {
-                                        if (callQueueEmpty) OutlinedButton(enabled = !busy, onClick = ::requestNextCall) { ActionLabel("Volver a consultar", Icons.Default.Refresh) }
-                                    }
+                                        actionLabel = if (callQueueEmpty) "Volver a consultar" else null,
+                                        actionIcon = Icons.Default.Refresh,
+                                        onAction = ::requestNextCall,
+                                        actionEnabled = !busy,
+                                    )
                                     callTask?.let { task ->
                                         OutlinedCard(Modifier.fillMaxWidth()) {
                                             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

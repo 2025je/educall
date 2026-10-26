@@ -7,6 +7,7 @@ on:
       - ".github/workflows/android-apks.yml"
       - "edumeeting-llamadas/**"
       - "edumeeting-asistencia/**"
+      - "edumeeting-ui/**"
       - "docker/android/**"
       - "compose.android.yaml"
   pull_request:
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/android-apks.yml"
       - "edumeeting-llamadas/**"
       - "edumeeting-asistencia/**"
+      - "edumeeting-ui/**"
       - "docker/android/**"
       - "compose.android.yaml"
   workflow_dispatch:

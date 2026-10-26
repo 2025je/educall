@@ -1,5 +1,6 @@
 package org.edumeeting.llamadas
 
+import org.edumeeting.ui.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
@@ -69,7 +70,7 @@ internal fun RoleWorkspace(
                 )
                 stats.chunked(2).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
-                        row.forEach { (label, value, icon) -> StatTile(label, value, icon, Modifier.weight(1f).fillMaxHeight()) }
+                        row.forEach { (label, value, icon) -> StatCard(icon, value.toString(), label, Modifier.weight(1f).fillMaxHeight()) }
                         if (row.size == 1) Spacer(Modifier.weight(1f))
                     }
                 }

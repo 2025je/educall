@@ -306,7 +306,7 @@ La clave privada nunca debe entrar en el APK ni en Git. Guarda una copia segura 
 
 ## Compilar las apps Android
 
-Son dos proyectos independientes y generan APK distintos que pueden instalarse juntos. Puedes compilarlos con Docker o con Android Studio.
+Son dos proyectos independientes y generan APK distintos que pueden instalarse juntos; ambos comparten el estilo mediante la librería [edumeeting-ui](./edumeeting-ui/). Puedes compilarlos con Docker o con Android Studio.
 
 ### Opción A: Docker (sin instalar Java, Gradle ni Android Studio)
 
@@ -344,7 +344,7 @@ artifacts\android\edumeeting-llamadas-debug.apk
 artifacts\android\edumeeting-asistencia-debug.apk
 ```
 
-La configuración Android es independiente de [compose.yaml](./compose.yaml): no requiere las credenciales PostgreSQL ni iniciar el servidor. Solo monta el código de la app correspondiente en modo lectura; compila una copia temporal y no modifica las carpetas originales. Las dependencias Gradle y la clave de firma debug se conservan en volúmenes Docker para acelerar compilaciones posteriores y permitir actualizar los APK debug sin cambiar su firma.
+La configuración Android es independiente de [compose.yaml](./compose.yaml): no requiere las credenciales PostgreSQL ni iniciar el servidor. Solo monta en modo lectura el código de la app correspondiente y la librería `edumeeting-ui`; compila una copia temporal y no modifica las carpetas originales. Las dependencias Gradle y la clave de firma debug se conservan en volúmenes Docker para acelerar compilaciones posteriores y permitir actualizar los APK debug sin cambiar su firma.
 
 Vuelve a ejecutar `build llamadas` si cambia el Dockerfile o el script del constructor; para cambios de código basta con repetir `run`. Si una compilación falla, el comando devuelve un error y no publica un APK nuevo; podría quedar un APK de una compilación anterior en la carpeta de salida.
 
@@ -368,7 +368,7 @@ Para descargar los APK:
 2. En **Artifacts**, descarga `edumeeting-llamadas-debug` y `edumeeting-asistencia-debug`.
 3. Descomprime los ZIP para obtener los archivos `.apk`. Los artefactos se conservan **14 días**.
 
-Ambas apps ejecutan sus pruebas unitarias antes de generar el APK (en Asistencia, entre otras, la verificación del PIN con un hash real de Django). El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
+Ambas apps ejecutan sus pruebas unitarias y las de `edumeeting-ui` antes de generar el APK (en Asistencia, entre otras, la verificación del PIN con un hash real de Django); un cambio en la librería recompila los dos APK. El constructor se cachea para acelerar ejecuciones posteriores. Los jobs solo tienen permiso de lectura del repositorio; no publican releases ni suben APK a Google Play.
 
 Son APK **debug**, no versiones de producción. Cada job utiliza una firma debug temporal: no se garantiza la misma firma entre ejecuciones ni respecto a los APK locales. Android puede exigir desinstalar una versión anterior para instalar estos APK, lo que elimina los datos locales; exporta primero los datos de Asistencia. Para actualizaciones persistentes o distribución de producción se necesita un almacén de firma estable y protegido, que este workflow no configura.
 
@@ -419,7 +419,26 @@ EduMeeting Llamadas y EduMeeting Asistencia siguen el estilo de [Zensical](https
 - Inicio muestra tarjetas de acciones rápidas (icono, título, descripción y «→ acción») y contadores; los botones tienen al menos 48 dp de alto.
 - Avisos tipo *admonition* con borde de color: información, advertencia, error y ejemplo (vista previa del código).
 - Los resultados de cada acción también aparecen como aviso flotante en la parte inferior, visible aunque la pantalla esté desplazada. Los errores y advertencias permanecen hasta pulsar **Cerrar**; los mensajes de éxito desaparecen solos.
-- Tema claro u oscuro, o según el sistema (por defecto), desde el menú lateral o la barra; la elección se guarda en el dispositivo.
+- Tema claro u oscuro, o según el sistema (por defecto), desde el menú lateral (**Apariencia**) o el botón ☀/☾ de la barra; la elección se guarda en el dispositivo. Al actualizar Llamadas desde una versión anterior se conserva el modo oscuro que tenías elegido.
+
+##### Librería compartida `edumeeting-ui`
+
+El estilo y los componentes comunes viven en un solo lugar, [edumeeting-ui](./edumeeting-ui/) (paquete `org.edumeeting.ui`), una librería Android con Compose que ambas apps incluyen como módulo Gradle. Cambiar un color, una forma o un componente ahí actualiza Llamadas y Asistencia a la vez.
+
+| Archivo | Contenido |
+|---|---|
+| `Theme.kt` | Paleta clara/oscura, tipografía y formas estilo Zensical; `EduMeetingTheme(dark)` y `ColorScheme.accent`. |
+| `ThemePreferences.kt` | `EduMeetingTheme { theme -> }` que recuerda claro/oscuro/sistema (DataStore `appearance`) y expone `ThemeState` (`dark`, `toggle`, `followsSystem`, `followSystem`). |
+| `Components.kt` | `Admonition` y `AdmonitionKind`, avisos flotantes (`showNotice`, `NoticeSnackbarHost`), `ScreenHeader`, `SectionHeading`, `OutlinedPanel`, `GridCard`, `StatCard`, `EmptyState`, `PrimaryButton`, `SecondaryButton`, `IconBadge`, `InitialsAvatar`, `DocSection`, `CodeText`, `ActionLabel` y `ThemeGlyph`. |
+
+Cada app la incluye desde su `settings.gradle.kts`:
+
+```kotlin
+include(":edumeeting-ui")
+project(":edumeeting-ui").projectDir = file("../edumeeting-ui")
+```
+
+y la declara en `app/build.gradle.kts` con `implementation(project(":edumeeting-ui"))`; en el código basta `import org.edumeeting.ui.*`. Lo específico de cada pantalla (navegación, formularios, lógica) permanece en su app. La librería tiene sus propias pruebas unitarias (preferencia de tema y duración de los avisos), que se ejecutan al compilar cualquiera de las dos apps. Por eso, en Android Studio o Docker la carpeta `edumeeting-ui` debe estar junto a `edumeeting-llamadas` y `edumeeting-asistencia`.
 
 **Conexión:** introduce una URL `https://` con certificado válido y accesible desde el dispositivo. El servidor local Docker de esta guía solo ofrece HTTP y, por tanto, **no basta para conectar EduMeeting Llamadas**. Necesitas publicar el servidor detrás de HTTPS; no desactives la validación de certificados. `localhost` en un teléfono es el teléfono, no tu computadora.
 

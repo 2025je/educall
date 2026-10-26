@@ -7,11 +7,11 @@ case "${APP_NAME:-}" in
 esac
 
 workdir="$(mktemp -d)"
-tar -C /source --exclude='./.gradle' --exclude='./build' \
-    --exclude='./app/build' --exclude='./local.properties' \
-    --exclude='./.idea' -cf "$workdir/source.tar" .
+# /source contiene la app y la librería compartida edumeeting-ui (incluida desde settings.gradle.kts).
+tar -C /source --exclude='.gradle' --exclude='build' \
+    --exclude='local.properties' --exclude='.idea' -cf "$workdir/source.tar" .
 tar -C "$workdir" -xf "$workdir/source.tar"
-cd "$workdir"
+cd "$workdir/$APP_NAME"
 
 set --
 if [ "$APP_NAME" = "edumeeting-asistencia" ]; then
@@ -22,7 +22,7 @@ if [ "$APP_NAME" = "edumeeting-asistencia" ]; then
     set -- "-PattendancePublicKey=$ATTENDANCE_SIGNING_PUBLIC_KEY"
 fi
 
-set -- "$@" :app:testDebugUnitTest
+set -- "$@" :edumeeting-ui:testDebugUnitTest :app:testDebugUnitTest
 
 gradle --no-daemon --console=plain --max-workers=2 \
     -Dorg.gradle.java.installations.auto-download=false \

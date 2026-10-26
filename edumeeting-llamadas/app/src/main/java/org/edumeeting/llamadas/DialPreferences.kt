@@ -15,20 +15,23 @@ private val Context.dialPreferences by preferencesDataStore(
     produceMigrations = { context -> listOf(SharedPreferencesMigration(context, "edumeeting_llamadas_ui")) },
 )
 
-internal data class DialSettings(val darkMode: Boolean?, val serverUrl: String)
+internal data class DialSettings(val serverUrl: String)
 
 internal class DialPreferences(private val store: DataStore<Preferences>) {
     constructor(context: Context) : this(context.applicationContext.dialPreferences)
-    private val darkModeKey = booleanPreferencesKey("dark_mode")
+    // Versiones anteriores guardaban aquí el tema; ahora vive en la librería compartida edumeeting-ui.
+    private val legacyDarkModeKey = booleanPreferencesKey("dark_mode")
     private val serverUrlKey = stringPreferencesKey("server_url")
 
     suspend fun load(): DialSettings {
         val preferences = store.data.first()
-        return DialSettings(preferences[darkModeKey], preferences[serverUrlKey] ?: "https://")
+        return DialSettings(preferences[serverUrlKey] ?: "https://")
     }
 
-    suspend fun setDarkMode(enabled: Boolean) {
-        store.edit { it[darkModeKey] = enabled }
+    suspend fun legacyDarkMode(): Boolean? = store.data.first()[legacyDarkModeKey]
+
+    suspend fun clearLegacyDarkMode() {
+        store.edit { it.remove(legacyDarkModeKey) }
     }
 
     suspend fun setServerUrl(url: String) {

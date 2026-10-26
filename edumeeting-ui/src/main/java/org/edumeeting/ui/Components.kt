@@ -1,4 +1,4 @@
-package org.edumeeting.asistencia
+package org.edumeeting.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
@@ -41,8 +42,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,15 +59,30 @@ enum class AdmonitionKind(val title: String, val color: Color, val icon: ImageVe
     Success("Completado", Color(0xFF00A86B), Icons.Default.CheckCircle),
     Warning("Atención", Color(0xFFFF9100), Icons.Default.Warning),
     Danger("Error", Color(0xFFD32F2F), Icons.Default.Warning),
+    Example("Ejemplo", Color(0xFF7C4DFF), Icons.AutoMirrored.Filled.List),
 }
 
 private val CardShape = RoundedCornerShape(12.dp)
 private val AdmonitionShape = RoundedCornerShape(10.dp)
 
+/** Aviso con el título del tipo (Nota, Atención…) y un mensaje corto. */
 @Composable
 fun Admonition(message: String, kind: AdmonitionKind = AdmonitionKind.Note) {
+    Admonition(kind, kind.title) {
+        Text(message, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** Aviso con título propio y contenido libre (texto, botones, listas). */
+@Composable
+fun Admonition(
+    kind: AdmonitionKind,
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit = {},
+) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = AdmonitionShape,
         color = kind.color.copy(alpha = 0.08f),
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -72,13 +92,60 @@ fun Admonition(message: String, kind: AdmonitionKind = AdmonitionKind.Note) {
             Box(Modifier.width(4.dp).fillMaxHeight().background(kind.color))
             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(kind.icon, contentDescription = null, tint = kind.color, modifier = Modifier.size(20.dp))
-                Column {
-                    Text(kind.title, fontWeight = FontWeight.Bold, color = kind.color, style = MaterialTheme.typography.labelLarge)
-                    Text(message, style = MaterialTheme.typography.bodyMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(title, fontWeight = FontWeight.Bold, color = kind.color, style = MaterialTheme.typography.labelLarge)
+                    content()
                 }
             }
         }
     }
+}
+
+/** Sección de formulario con borde fino y título destacado. */
+@Composable
+fun DocSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    OutlinedPanel(modifier = modifier) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionHeading(title)
+            content()
+        }
+    }
+}
+
+/** Texto monoespaciado sobre fondo neutro, para códigos y PIN. */
+@Composable
+fun CodeText(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.titleMedium,
+    )
+}
+
+/** Icono ☀/☾ del botón que alterna entre tema claro y oscuro. */
+@Composable
+fun ThemeGlyph(dark: Boolean, contentDescription: String? = null) {
+    Text(
+        if (dark) "☀" else "☾",
+        style = MaterialTheme.typography.titleLarge,
+        modifier = if (contentDescription == null) Modifier else Modifier.semantics { this.contentDescription = contentDescription },
+    )
+}
+
+/** Icono + texto para el contenido de un botón. */
+@Composable
+fun ActionLabel(text: String, icon: ImageVector) {
+    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+    Spacer(Modifier.width(8.dp))
+    Text(text)
 }
 
 @Composable
@@ -218,6 +285,7 @@ fun EmptyState(
     actionLabel: String? = null,
     actionIcon: ImageVector? = null,
     onAction: (() -> Unit)? = null,
+    actionEnabled: Boolean = true,
 ) {
     Column(
         Modifier.fillMaxWidth().padding(vertical = 32.dp, horizontal = 8.dp),
@@ -239,7 +307,7 @@ fun EmptyState(
         )
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(4.dp))
-            PrimaryButton(actionLabel, actionIcon, onAction)
+            PrimaryButton(actionLabel, actionIcon, onAction, enabled = actionEnabled)
         }
     }
 }

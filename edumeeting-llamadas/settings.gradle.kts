@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "EduMeeting Llamadas"
 include(":app")
+include(":edumeeting-ui")
+project(":edumeeting-ui").projectDir = file("../edumeeting-ui")

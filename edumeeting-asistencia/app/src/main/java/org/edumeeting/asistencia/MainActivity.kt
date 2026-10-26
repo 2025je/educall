@@ -120,6 +120,7 @@ import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import org.edumeeting.ui.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -525,11 +526,6 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
             dismissButton = { TextButton(onClick = { selectedParticipant = null }) { Text("Cancelar") } },
         )
     }
-}
-
-@Composable
-private fun ThemeGlyph(dark: Boolean) {
-    Text(if (dark) "☀" else "☾", style = MaterialTheme.typography.titleLarge)
 }
 
 @Composable
