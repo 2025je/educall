@@ -132,7 +132,8 @@ foreach ($name in $selected) {
     $info = $apps[$name]
     $apkPath = Join-Path $projectRoot "artifacts\android\$($info.Apk)"
     Write-Output "Instalando $($info.Apk) ($([math]::Round((Get-Item -LiteralPath $apkPath).Length / 1MB, 1)) MB)..."
-    $install = Invoke-Adb @("-s", $Device, "install", "-r", $apkPath)
+    # --user 0: solo el perfil principal. Sin esto, Samsung "Dual App"/Carpeta segura reciben otra copia.
+    $install = Invoke-Adb @("-s", $Device, "install", "-r", "--user", "0", $apkPath)
     Write-Output $install.Output
     $packages = (Invoke-Adb @("-s", $Device, "shell", "pm", "list", "packages", "--user", "0", $info.Package)).Output
     if ($install.Output -notmatch '(?m)^Success' -or $packages -notmatch [regex]::Escape("package:$($info.Package)")) {

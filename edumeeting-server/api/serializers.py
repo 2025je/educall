@@ -68,6 +68,23 @@ class MeetingUpdateSerializer(MeetingSerializer):
         read_only_fields = ()
 
 
+class AccountStatusSerializer(serializers.Serializer):
+    is_active = StrictBooleanField(label="Usuario activo")
+
+
+class AccountInputSerializer(serializers.Serializer):
+    """Request shape documented in the schema; validation is done by UserManagementForm."""
+
+    username = serializers.CharField(label="Usuario")
+    first_name = serializers.CharField(label="Nombre", required=False, allow_blank=True)
+    last_name = serializers.CharField(label="Apellidos", required=False, allow_blank=True)
+    groups = serializers.ListField(child=serializers.IntegerField(), label="Grupos", required=False)
+    initials = serializers.CharField(label="Iniciales de operador", required=False, allow_blank=True)
+    is_active = serializers.BooleanField(label="Usuario activo", required=False)
+    password1 = serializers.CharField(label="Contraseña", required=False, allow_blank=True)
+    password2 = serializers.CharField(label="Confirmar contraseña", required=False, allow_blank=True)
+
+
 class SelectMeetingSerializer(serializers.Serializer):
     meeting_id = serializers.CharField(allow_null=True, required=False)
 

@@ -59,9 +59,13 @@ from attendance.workspace import (
     workspace_context,
 )
 from attendance.realtime import event_meetings
+from attendance.accounts import group_choices, lock_account, managed_accounts, save_account, serialize_account, set_account_active
+from attendance.forms import UserManagementForm
 from django.contrib.auth import get_user_model
+from django.core.exceptions import NON_FIELD_ERRORS
 
 from . import serializers as s
+from .exceptions import flatten_errors
 from .negotiation import IgnoreClientContentNegotiation
 from .permissions import IsAttendanceAdministrator, IsSuperuser, model_permission, role_permission
 from .filters import AttendanceReportFilter, ParticipantFilter, apply_filters
@@ -128,6 +132,78 @@ class GlobalStatisticsView(APIView):
 
     def get(self, request):
         return Response(global_statistics())
+
+
+def _account_form(request, instance):
+    data = request.data
+    if not isinstance(data, dict):
+        raise ValidationError("Envía los datos del usuario como un objeto JSON.")
+    groups = data.get("groups", [])
+    if not isinstance(groups, list) or any(type(group) is not int for group in groups):
+        raise ValidationError("Grupos: envía una lista de identificadores numéricos.")
+    is_active = data.get("is_active", instance.is_active if instance else True)
+    if type(is_active) is not bool:
+        raise ValidationError("Usuario activo: debe ser true o false.")
+    fields = ("username", "first_name", "last_name", "initials", "password1", "password2")
+    if any(not isinstance(data.get(name, ""), str) for name in fields):
+        raise ValidationError("Los campos de texto deben enviarse como texto.")
+    form_data = {name: data.get(name, "") for name in fields}
+    form_data.update(groups=[str(group) for group in groups], is_active=is_active)
+    return UserManagementForm(form_data, instance=instance)
+
+
+def _form_error(form):
+    labels = {name: field.label or name for name, field in form.fields.items()}
+    errors = {
+        "non_field_errors" if name == NON_FIELD_ERRORS else name: [str(message) for message in messages]
+        for name, messages in form.errors.items()
+    }
+    return ValidationError(flatten_errors(errors, labels))
+
+
+def _save_account(request, user_id):
+    with transaction.atomic():
+        instance = lock_account(request.user, user_id) if user_id is not None else None
+        form = _account_form(request, instance)
+        account = save_account(form, request.user, created=user_id is None) if form.is_valid() else None
+        if account is None:
+            raise _form_error(form)
+    account = managed_accounts(request.user).get(pk=account.pk)
+    return Response(
+        {"user": serialize_account(account)},
+        status=status.HTTP_201_CREATED if user_id is None else status.HTTP_200_OK,
+    )
+
+
+class AccountListView(APIView):
+    """Superuser-only: list the other accounts with their groups, or create one."""
+
+    permission_classes = (IsAuthenticated, IsSuperuser)
+
+    def get(self, request):
+        return Response({
+            "users": [serialize_account(account) for account in managed_accounts(request.user)],
+            "groups": group_choices(),
+        })
+
+    def post(self, request):
+        return _save_account(request, None)
+
+
+class AccountDetailView(APIView):
+    permission_classes = (IsAuthenticated, IsSuperuser)
+
+    def post(self, request, user_id):
+        return _save_account(request, user_id)
+
+
+class AccountStatusView(APIView):
+    permission_classes = (IsAuthenticated, IsSuperuser)
+
+    def post(self, request, user_id):
+        data = s.validated_data(s.AccountStatusSerializer(data=request.data))
+        account = set_account_active(request.user, user_id, data["is_active"])
+        return Response({"user": serialize_account(managed_accounts(request.user).get(pk=account.pk))})
 
 
 class RegisterParticipantView(APIView):

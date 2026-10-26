@@ -209,13 +209,15 @@ Los códigos, intentos de llamada, asistencias e historiales generados se consul
 
 ### Superusuario: solo usuarios y estadísticas
 
-El superusuario **no opera ni modifica reuniones**, aunque pertenezca a grupos o esté asignado como miembro: no crea, edita ni activa/desactiva reuniones, no asigna usuarios, no registra personas, no atiende llamadas, no define el PIN, no exporta/importa asistencia ni resuelve conflictos. Esto se aplica en el servidor, por lo que vale igual para la web, la API y EduMeeting Llamadas (que además rechaza el inicio de sesión del superusuario con un aviso). EduMeeting Asistencia no usa cuentas del servidor.
+El superusuario **no opera ni modifica reuniones**, aunque pertenezca a grupos o esté asignado como miembro: no crea, edita ni activa/desactiva reuniones, no asigna usuarios, no registra personas, no atiende llamadas, no define el PIN, no exporta/importa asistencia ni resuelve conflictos. Esto se aplica en el servidor, por lo que vale igual para la web, la API y EduMeeting Llamadas. EduMeeting Asistencia no usa cuentas del servidor.
 
 Sus funciones son:
 
-- **Usuarios y grupos** (`/users/`): crear, editar y activar/desactivar cuentas.
+- **Usuarios y grupos** (`/users/`): crear, editar y activar/desactivar cuentas. API: `GET/POST /api/v1/users/`, `POST /api/v1/users/{id}/` y `POST /api/v1/users/{id}/status/`.
 - **Estadísticas** (`/statistics/`, pestaña **Estadísticas**; también es su página de inicio): vista de solo lectura de **todas** las reuniones, activas e inactivas, con totales generales y, por reunión, administrador, personas registradas, llamadas pendientes/finalizadas, intentos, invitaciones aceptadas, asistencias, registros en revisión y rechazados, y la actividad por usuario. API: `GET /api/v1/statistics/`.
 - Documentación de la API, API navegable, plantillas de WhatsApp, perfiles de operador y consulta de datos en `/admin/` (solo lectura para reuniones y sus datos).
+
+En **EduMeeting Llamadas**, el superusuario inicia sesión en un modo propio: no ve reuniones, llamadas ni registro, y el menú solo ofrece **Inicio**, **Estadísticas** (totales y una tarjeta por reunión con su actividad por usuario) y **Usuarios y grupos** (lista filtrable con grupos y estado; crear y editar con casillas de grupo, iniciales solo para operadores y contraseña opcional al editar; activar o desactivar con confirmación). Usa la misma validación y auditoría que la web.
 
 ### Interfaz web
 
@@ -295,7 +297,7 @@ Los grupos se configuran en [attendance/signals.py](./edumeeting-server/attendan
 - **Reunión activa:** web y Llamadas muestran el nombre de usuario, la reunión seleccionada y un selector de reuniones disponibles. No se selecciona ninguna silenciosamente. El servidor valida cada solicitud; manipular un identificador, conservar una pantalla abierta o usar un APK antiguo no evita los controles.
 - **Límites de WhatsApp:** requiere rol de operador en la reunión del participante, autorización de contacto y ausencia de «No volver a contactar». Las campañas quedan limitadas a la reunión activa; cada operador solo actualiza sus propios mensajes. No hay envío automático ni confirmación de entrega.
 - **Retirar miembros:** al retirar un operador se revoca su acceso y sus llamadas asignadas pendientes vuelven a la cola. El historial y las estadísticas se conservan. Las cuentas inactivas o sin el grupo correspondiente no pueden usar una asignación antigua.
-- **Interfaces:** tanto la web como Llamadas ofrecen gestión de reuniones (crear, editar, desactivar), asignaciones/estadísticas y registro en la cola según las capacidades del usuario y de la reunión activa. No incluyen creación de cuentas; el superusuario usa **Usuarios y grupos** o el comando local.
+- **Interfaces:** tanto la web como Llamadas ofrecen gestión de reuniones (crear, editar, desactivar), asignaciones/estadísticas y registro en la cola según las capacidades del usuario y de la reunión activa. No incluyen creación de cuentas para los roles de reunión; el superusuario usa **Usuarios y grupos** (web o Llamadas) o el comando local.
 - **Registro offline:** el grupo `REGISTRAR` del servidor no concede ni restringe por sí mismo el uso de EduMeeting Asistencia. Esa app trabaja con paquetes firmados y archivos locales; exportar paquetes e importar resultados en el servidor requiere los permisos indicados en la tabla.
 - **Migraciones:** al ejecutar `migrate`, se crean los tres grupos y se vuelve a establecer su conjunto de permisos predeterminado. Las modificaciones manuales a los permisos de esos grupos pueden sobrescribirse; para permisos adicionales persistentes, usa grupos propios o permisos individuales.
 
@@ -661,7 +663,9 @@ En el teléfono, abre **Opciones de desarrollador → Depuración inalámbrica**
 | `-Launch` | Abre la app instalada. |
 | `-AdbPath` | Ruta explícita a `adb.exe`. |
 
-Las actualizaciones usan `adb install -r`, por lo que se conservan los datos y la sesión de la app.
+Las actualizaciones usan `adb install -r --user 0`, por lo que se conservan los datos y la sesión de la app y solo se instala en el perfil principal.
+
+> **¿Dos copias de la misma app?** En teléfonos Samsung, `adb install` sin `--user` instala también en los perfiles secundarios, como **Dual App/Dual Messenger** (usuario 95) o la **Carpeta segura** (150). Esas copias son el mismo APK, pero con datos y sesión independientes (la copia clonada suele mostrar un icono con un distintivo). El script ya instala solo en el perfil principal. Para quitar una copia clonada (borra sus datos, incluidos registros de Asistencia que no se hayan exportado): `adb shell pm uninstall --user 95 org.edumeeting.llamadas` (o `org.edumeeting.asistencia`).
 
 Para distribuir fuera de pruebas usa las versiones firmadas de [Versiones publicadas](#versiones-publicadas-releases-firmadas) (o **Build → Generate Signed App Bundle or APK** con el mismo almacén). No distribuyas el APK debug como versión de producción.
 
@@ -771,6 +775,9 @@ Las operaciones sobre participantes, llamadas, mensajes, asignaciones y estadís
 | `GET/POST /meetings/members/` | Consultar candidatos/asignaciones o guardar listas de IDs `registrars` y `operators`; solo el administrador de la reunión. |
 | `GET /meetings/statistics/` | Estadísticas de la reunión activa y actividad por usuario; solo su administrador. |
 | `GET /statistics/` | Estadísticas de solo lectura de todas las reuniones (`totals` y `meetings`); solo el superusuario. |
+| `GET/POST /users/` | Listar las demás cuentas con grupos, iniciales y estado (`users`) y los grupos disponibles (`groups`), o crear una cuenta (`username`, `first_name`, `last_name`, `groups` como lista de IDs, `initials`, `is_active`, `password1`, `password2`); solo el superusuario. Valida igual que la web. |
+| `POST /users/{id}/` | Editar otra cuenta con los mismos campos; las contraseñas vacías conservan la actual y `is_active` omitido conserva el estado. La cuenta propia responde 404. |
+| `POST /users/{id}/status/` | Activar o desactivar otra cuenta (`is_active` booleano); solo el superusuario. |
 | `POST /participants/` | Registrar `full_name`, `phone`, `contact_authorized` y crear tarea en la reunión activa; solo registradores asignados. |
 | `GET/PUT /meetings/{meeting_id}/attendance-pin/` | Consultar si hay PIN (`configured`) o definirlo (`pin`, 6 a 8 dígitos; también acepta POST); solo el administrador de la reunión. |
 | `GET /meetings/{meeting_id}/package/` | Descargar un paquete firmado (requiere PIN definido); solo el administrador de la reunión. |

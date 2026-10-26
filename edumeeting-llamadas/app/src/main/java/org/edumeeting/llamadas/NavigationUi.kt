@@ -26,6 +26,8 @@ internal enum class DialDestination(val title: String, val icon: ImageVector, va
     Register("Registrar", Icons.Default.Person, "Agrega una persona a la reunión activa"),
     Assignments("Asignaciones y estadísticas", Icons.AutoMirrored.Filled.List, "Organiza tu equipo y consulta el progreso"),
     Manage("Gestionar reuniones", Icons.Default.Edit, "Crea y actualiza tus reuniones"),
+    Statistics("Estadísticas", Icons.Default.Info, "Progreso de todas las reuniones, solo lectura"),
+    Users("Usuarios y grupos", Icons.Default.AccountCircle, "Crea, edita, activa o desactiva cuentas"),
 }
 
 @Composable

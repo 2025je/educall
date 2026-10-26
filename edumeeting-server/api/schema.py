@@ -51,8 +51,41 @@ REQUESTS = {
     "ImportResultsView": obj("ResultsUpload", file=serializers.FileField()),
     "ImportPreviewView": obj("ResultsPreviewUpload", file=array(serializers.FileField())),
     "MeetingAttendancePinView": obj("AttendancePinUpdate", pin=text(min_length=6, max_length=8)),
+    "AccountListView": s.AccountInputSerializer,
+    "AccountDetailView": s.AccountInputSerializer,
+    "AccountStatusView": s.AccountStatusSerializer,
 }
+class AccountGroupSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    label = serializers.CharField()
+
+
+class AccountSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    first_name = serializers.CharField(allow_blank=True)
+    last_name = serializers.CharField(allow_blank=True)
+    full_name = serializers.CharField(allow_blank=True)
+    is_active = serializers.BooleanField()
+    initials = serializers.CharField(allow_blank=True)
+    groups = AccountGroupSerializer(many=True)
+    last_login = serializers.DateTimeField(allow_null=True)
+
+
+class AccountResultSerializer(serializers.Serializer):
+    user = AccountSerializer()
+
+
+class AccountsSerializer(serializers.Serializer):
+    users = AccountSerializer(many=True)
+    groups = AccountGroupSerializer(many=True)
+
+
 RESPONSES = {
+    "AccountListView": {"get": AccountsSerializer, "post": AccountResultSerializer},
+    "AccountDetailView": AccountResultSerializer,
+    "AccountStatusView": AccountResultSerializer,
     "SessionContextView": obj(
         "SessionContext", username=text(), is_superuser=boolean(), meeting=MEETING_REF,
         can_create=boolean(), can_manage=boolean(), can_register=boolean(), can_operate=boolean(),
@@ -135,6 +168,8 @@ class EduMeetingSchema(AutoSchema):
     def get_operation_id(self):
         if type(self.view).__name__ == "MeetingDetailView":
             return f"meeting_{self.method.lower()}_update"
+        if type(self.view).__name__ == "AccountDetailView":
+            return "users_update"
         return super().get_operation_id()
 
     def get_request_serializer(self):
@@ -159,10 +194,12 @@ class EduMeetingSchema(AutoSchema):
             response = OK
         else:
             response = RESPONSES.get(name)
+            if isinstance(response, dict):
+                response = response[self.method.lower()]
         if response is None:
             return super().get_response_serializers()
         code = 202 if name == "PackageExportCreateView" else 201 if self.method == "POST" and name in (
-            "MeetingListView", "RegisterParticipantView",
+            "MeetingListView", "RegisterParticipantView", "AccountListView",
         ) else 200
         content_type = {
             "ExportPackageView": "application/vnd.edumeeting.attendance+zip",

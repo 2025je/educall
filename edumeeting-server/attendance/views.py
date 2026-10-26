@@ -1,19 +1,16 @@
 from django.contrib import messages
-from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin, UserPassesTestMixin
-from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import FormView, UpdateView
 
 from .access import has_role, managed_meetings
+from .accounts import lock_account, managed_accounts, save_account, set_account_active
 from .forms import MeetingCreationForm, MeetingEditForm, UserManagementForm
-from .models import AuditEvent
 from .workspace import global_statistics, record_meeting_update, workspace_context
 
 
@@ -36,34 +33,15 @@ class UserManagementView(SuperuserRequiredMixin, View):
 
     def handle(self, request, user_id):
         with transaction.atomic():
-            account = None
-            if user_id is not None:
-                account = get_object_or_404(
-                    get_user_model().objects.select_for_update().exclude(pk=request.user.pk), pk=user_id,
-                )
+            account = lock_account(request.user, user_id) if user_id is not None else None
             form = UserManagementForm(request.POST if request.method == "POST" else None, instance=account)
             if request.method == "POST" and form.is_valid():
-                try:
-                    with transaction.atomic():
-                        account = form.save()
-                        AuditEvent.objects.create(
-                            actor=request.user, action="user.updated" if user_id else "user.created",
-                            object_type="User", object_id=str(account.pk),
-                            metadata={"fields": sorted(form.changed_data)},
-                        )
-                except IntegrityError:
-                    form.add_error(None, "Conflicto al guardar el usuario o las iniciales. Revisa los datos e inténtalo de nuevo.")
-                else:
+                if save_account(form, request.user, created=user_id is None) is not None:
                     messages.success(request, "Usuario actualizado." if user_id else "Usuario creado.")
                     return redirect("user-list")
-        users = (
-            get_user_model().objects.exclude(pk=request.user.pk)
-            .order_by("username")
-            .prefetch_related(Prefetch("groups", queryset=Group.objects.order_by("name")))
-        )
         return render(request, self.template_name, {
             **workspace_context(request),
-            "listed_users": users,
+            "listed_users": managed_accounts(request.user),
             "form": form,
             "editing_account": account if user_id else None,
         })
@@ -77,16 +55,7 @@ class UserToggleView(SuperuserRequiredMixin, View):
         if active not in ("0", "1"):
             messages.error(request, "Indica un estado de usuario válido.")
             return redirect("user-list")
-        with transaction.atomic():
-            account = get_object_or_404(
-                get_user_model().objects.select_for_update().exclude(pk=request.user.pk), pk=user_id,
-            )
-            account.is_active = active == "1"
-            account.save(update_fields=("is_active",))
-            AuditEvent.objects.create(
-                actor=request.user, action="user.status_changed", object_type="User", object_id=str(account.pk),
-                metadata={"is_active": account.is_active},
-            )
+        account = set_account_active(request.user, user_id, active == "1")
         messages.success(request, "Usuario activado." if account.is_active else "Usuario desactivado.")
         return redirect("user-list")
 

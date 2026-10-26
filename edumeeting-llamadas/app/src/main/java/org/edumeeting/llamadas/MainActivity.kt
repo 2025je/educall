@@ -141,6 +141,8 @@ private fun DialScreen() {
     var activeMeetingName by remember { mutableStateOf("Sin seleccionar") }
     var activeMeetingId by remember { mutableStateOf<String?>(null) }
     var signedInUsername by remember { mutableStateOf("") }
+    var isSuperuser by remember { mutableStateOf(false) }
+    val superuserState = remember(api) { SuperuserState() }
     var canManage by remember { mutableStateOf(false) }
     var canRegister by remember { mutableStateOf(false) }
     var canOperate by remember { mutableStateOf(false) }
@@ -287,6 +289,7 @@ private fun DialScreen() {
             activeMeetingId = null
             activeMeetingName = "Sin seleccionar"
             signedInUsername = ""
+            isSuperuser = false
             canManage = false
             canRegister = false
             canOperate = false
@@ -335,6 +338,11 @@ private fun DialScreen() {
 
     val destinations = buildList {
         add(DialDestination.Home)
+        if (isSuperuser) {
+            add(DialDestination.Statistics)
+            add(DialDestination.Users)
+            return@buildList
+        }
         add(DialDestination.Meetings)
         if (canOperate) { add(DialDestination.Calls); add(DialDestination.Search) }
         if (canRegister) add(DialDestination.Register)
@@ -386,7 +394,10 @@ private fun DialScreen() {
                         Icon(Icons.Default.Call, null, Modifier.padding(top = 16.dp).size(36.dp), tint = MaterialTheme.colorScheme.primary)
                         Text("EduMeeting Llamadas", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                         Text("Usuario: $signedInUsername", style = MaterialTheme.typography.bodyMedium)
-                        Text("Reunión activa: $activeMeetingName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (isSuperuser) "Superusuario: usuarios y estadísticas" else "Reunión activa: $activeMeetingName",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         HorizontalDivider(Modifier.padding(vertical = 12.dp))
                         if (api != null) destinations.forEach { screen ->
                             NavigationDrawerItem(
@@ -448,7 +459,10 @@ private fun DialScreen() {
                             title = {
                                 Column {
                                     Text(destination.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text("Reunión activa: $activeMeetingName", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        if (isSuperuser) "Superusuario" else "Reunión activa: $activeMeetingName",
+                                        style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             },
                             navigationIcon = {
@@ -492,18 +506,20 @@ private fun DialScreen() {
                                         runRequest {
                                             val sessionApi = withContext(Dispatchers.IO) { DjangoSessionApi(serverUrl).also { it.login(username, password) } }
                                             val account = withContext(Dispatchers.IO) { sessionApi.get("/api/v1/session/") }
-                                            if (account.optBoolean("is_superuser")) {
-                                                withContext(Dispatchers.IO) { runCatching { sessionApi.logout() } }
-                                                throw IllegalStateException(
-                                                    "El superusuario no opera reuniones. Usa la web para gestionar usuarios y ver estadísticas.",
-                                                )
-                                            }
                                             try {
                                                 preferences.setServerUrl(serverUrl)
                                             } catch (error: IOException) {
                                                 scope.launch {
                                                     snackbarHostState.showNotice("No se pudo guardar la URL: ${error.message}", AdmonitionKind.Danger)
                                                 }
+                                            }
+                                            if (account.optBoolean("is_superuser")) {
+                                                signedInUsername = account.getString("username")
+                                                isSuperuser = true
+                                                api = sessionApi
+                                                password = ""
+                                                notice = "Sesión de superusuario: gestiona usuarios y consulta estadísticas."
+                                                return@runRequest
                                             }
                                             api = sessionApi
                                             password = ""
@@ -547,7 +563,9 @@ private fun DialScreen() {
                     ) {
                         if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                         when (destination) {
-                            DialDestination.Home -> item {
+                            DialDestination.Home -> if (isSuperuser) item {
+                                SuperuserHome(username = signedInUsername, navigate = { destination = it })
+                            } else item {
                                 WorkspaceHome(
                                     username = signedInUsername, meeting = activeMeetingName,
                                     roles = buildList {
@@ -692,6 +710,15 @@ private fun DialScreen() {
                                         }
                                     }
                                 }
+                            }
+                            DialDestination.Statistics -> if (isSuperuser) item {
+                                SuperuserStatistics(api = api!!, busy = busy, runRequest = ::runRequest, state = superuserState)
+                            }
+                            DialDestination.Users -> if (isSuperuser) item {
+                                SuperuserAccounts(
+                                    api = api!!, busy = busy, runRequest = ::runRequest,
+                                    onNotice = { notice = it }, state = superuserState,
+                                )
                             }
                             DialDestination.Register, DialDestination.Assignments -> item {
                                 if (activeMeetingId == null) EmptyState(
