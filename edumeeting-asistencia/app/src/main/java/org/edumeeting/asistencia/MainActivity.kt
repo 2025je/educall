@@ -121,6 +121,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import org.edumeeting.ui.*
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -226,6 +229,12 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
     val attendance by remember(selectedId) {
         if (selectedId == null) flowOf(emptyList()) else repository.attendance(selectedId!!)
     }.collectAsState(initial = emptyList())
+    val pendingExportTotal by repository.pendingExportTotal().collectAsState(initial = 0)
+    val syncStatus = SyncStatus(
+        pending = attendance.count { it.exportedAt == null },
+        pendingTotal = pendingExportTotal,
+        lastExportedAt = attendance.mapNotNull { it.exportedAt }.maxOrNull(),
+    )
     val packageRosterCount by remember(selectedId) {
         if (selectedId == null) flowOf(0) else repository.participantCount(selectedId!!)
     }.collectAsState(initial = 0)
@@ -372,7 +381,8 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                     selectedMeeting = selectedMeeting,
                     participants = packageRosterCount,
                     registered = attendance.size,
-                    pending = attendance.count { it.exportedAt == null },
+                    pending = syncStatus.pending,
+                    syncStatus = syncStatus,
                     operator = activeOperator,
                     onNavigate = ::navigate,
                     onImport = ::launchImport,
@@ -440,6 +450,7 @@ private fun AttendanceApp(repository: AttendanceRepository, theme: ThemeState) {
                     meetings = meetings,
                     attendance = attendance,
                     packageRosterCount = packageRosterCount,
+                    syncStatus = syncStatus,
                     onExport = { meeting ->
                         exportLauncher.launch("${meeting.number.toString().padStart(2, '0')}-attendance.attendance-results")
                     },
@@ -668,6 +679,7 @@ private fun HomeScreen(
     participants: Int,
     registered: Int,
     pending: Int,
+    syncStatus: SyncStatus,
     operator: String?,
     onNavigate: (AppScreen) -> Unit,
     onImport: () -> Unit,
@@ -739,6 +751,9 @@ private fun HomeScreen(
                 StatCard(Icons.Default.CheckCircle, registered.toString(), "Asistencias registradas", Modifier.weight(1f))
                 StatCard(Icons.AutoMirrored.Filled.Send, pending.toString(), "Pendientes de exportar", Modifier.weight(1f))
             }
+        }
+        if (selectedMeeting != null || syncStatus.pendingTotal > 0) item {
+            SyncStatusPanel(syncStatus, onExport = { onNavigate(AppScreen.Exportar) })
         }
         item { SectionHeading("Acciones rápidas") }
         items(actions.chunked(2)) { row ->
@@ -967,42 +982,25 @@ private fun IdentityScreen(
             )
         }
         item {
-            OutlinedTextField(
+            FormTextField(
                 value = name,
                 onValueChange = onNameChange,
-                label = { Text("Tu nombre") },
-                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                trailingIcon = {
-                    if (name.isNotEmpty()) IconButton(onClick = { onNameChange("") }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Borrar nombre")
-                    }
-                },
-                supportingText = { Text("Aparecerá en cada asistencia que registres.") },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Words,
-                    imeAction = ImeAction.Next,
-                ),
-                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                label = "Tu nombre",
+                leadingIcon = Icons.Default.Person,
+                clearable = true,
+                clearDescription = "Borrar nombre",
+                supportingText = "Aparecerá en cada asistencia que registres.",
+                capitalization = KeyboardCapitalization.Words,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         item {
-            OutlinedTextField(
+            PinField(
                 value = pin,
                 onValueChange = onPinChange,
-                label = { Text("PIN de la reunión") },
-                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                supportingText = { Text("De 6 a 8 dígitos. Se verifica en el teléfono, sin conexión.") },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    focusManager.clearFocus()
-                    onStart()
-                }),
+                label = "PIN de la reunión",
+                supportingText = "De 6 a 8 dígitos. Se verifica en el teléfono, sin conexión.",
+                onSubmit = onStart,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1126,21 +1124,16 @@ private fun RegisterScreen(
             }
         }
         item {
-            OutlinedTextField(
+            FormTextField(
                 value = query,
                 onValueChange = onQueryChange,
-                placeholder = { Text("Nombre, teléfono o código") },
-                label = { Text("Buscar participante") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }) {
-                        Icon(Icons.Default.Clear, contentDescription = "Limpiar búsqueda")
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                label = "Buscar participante",
+                placeholder = "Nombre, teléfono o código",
+                leadingIcon = Icons.Default.Search,
+                clearable = true,
+                clearDescription = "Limpiar búsqueda",
+                imeAction = ImeAction.Search,
+                onSubmit = {},
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1202,6 +1195,42 @@ private fun RegisterScreen(
     }
 }
 
+/** Estado de sincronización: lo que falta exportar y cuándo se exportó por última vez. */
+private data class SyncStatus(val pending: Int, val pendingTotal: Int, val lastExportedAt: String?)
+
+private val ExportTimeFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
+
+private fun formatExportTime(value: String): String =
+    runCatching { ExportTimeFormat.format(Instant.parse(value).atZone(ZoneId.systemDefault())) }.getOrDefault(value)
+
+@Composable
+private fun SyncStatusPanel(status: SyncStatus, onExport: (() -> Unit)? = null) {
+    val otherMeetings = status.pendingTotal - status.pending
+    val lastExport = status.lastExportedAt?.let { "Última exportación: ${formatExportTime(it)}." }
+        ?: "Esta reunión aún no se ha exportado."
+    val (kind, title, message) = when {
+        status.pending > 0 -> Triple(
+            AdmonitionKind.Warning,
+            "${status.pending} asistencias sin exportar",
+            "$lastExport Exporta el archivo y entrégalo al administrador para no perder registros.",
+        )
+        status.lastExportedAt != null -> Triple(AdmonitionKind.Success, "Todo exportado", lastExport)
+        else -> Triple(AdmonitionKind.Info, "Sin asistencias pendientes", lastExport)
+    }
+    Admonition(kind, title, Modifier.semantics(mergeDescendants = true) {}) {
+        Text(message, style = MaterialTheme.typography.bodyMedium)
+        if (otherMeetings > 0) {
+            Text(
+                "Además hay $otherMeetings asistencias pendientes en otras reuniones.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (onExport != null && status.pending > 0) {
+            TextButton(onClick = onExport, modifier = Modifier.heightIn(min = 48.dp)) { Text("Ir a exportar") }
+        }
+    }
+}
+
 @Composable
 private fun ExportScreen(
     modifier: Modifier,
@@ -1211,6 +1240,7 @@ private fun ExportScreen(
     meetings: List<LocalMeeting>,
     attendance: List<AttendanceDisplay>,
     packageRosterCount: Int,
+    syncStatus: SyncStatus,
     onExport: (LocalMeeting) -> Unit,
     onChooseMeeting: () -> Unit,
 ) {
@@ -1263,6 +1293,7 @@ private fun ExportScreen(
                 )
             }
         }
+        item { SyncStatusPanel(syncStatus) }
         item {
             Admonition(
                 "Al exportar, las asistencias locales se conservan. El administrador puede combinar los archivos de varios teléfonos.",
@@ -1306,7 +1337,8 @@ private fun AttendanceRow(record: AttendanceDisplay, meetings: List<LocalMeeting
                 val statusColor = if (exported) AdmonitionKind.Success.color else AdmonitionKind.Info.color
                 Icon(
                     if (exported) Icons.Default.CheckCircle else Icons.AutoMirrored.Filled.Send,
-                    contentDescription = if (exported) "Exportado" else "Pendiente de exportar",
+                    // El estado ya se lee en el texto inferior; el icono es decorativo.
+                    contentDescription = null,
                     tint = statusColor,
                     modifier = Modifier.size(20.dp),
                 )
@@ -1322,7 +1354,7 @@ private fun AttendanceRow(record: AttendanceDisplay, meetings: List<LocalMeeting
             Text(
                 if (exported) "Exportado ${record.exportedAt}" else "Pendiente de exportar",
                 style = MaterialTheme.typography.labelMedium,
-                color = if (exported) AdmonitionKind.Success.color else MaterialTheme.colorScheme.primary,
+                color = if (exported) AdmonitionKind.Success.textColor() else MaterialTheme.colorScheme.primary,
             )
             if (!record.exceptionNote.isNullOrBlank()) Admonition("Excepción: ${record.exceptionNote}", AdmonitionKind.Warning)
         }

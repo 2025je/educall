@@ -61,6 +61,9 @@ interface AttendanceDao {
     @Query("UPDATE LocalAttendance SET exportedAt = :exportedAt WHERE id IN (:ids)")
     suspend fun markExported(ids: List<String>, exportedAt: String)
 
+    @Query("SELECT COUNT(*) FROM LocalAttendance WHERE exportedAt IS NULL")
+    fun pendingExportTotal(): Flow<Int>
+
     @Insert
     suspend fun auditSelection(audit: MeetingSelectionAudit)
 }

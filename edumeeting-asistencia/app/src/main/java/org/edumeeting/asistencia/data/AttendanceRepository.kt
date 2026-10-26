@@ -156,6 +156,7 @@ class AttendanceRepository(private val context: Context, private val database: A
 
     fun attendance(meetingId: String): Flow<List<AttendanceDisplay>> = dao.attendanceForMeeting(meetingId)
     fun participantCount(meetingId: String): Flow<Int> = dao.participantCount(meetingId)
+    fun pendingExportTotal(): Flow<Int> = dao.pendingExportTotal()
     suspend fun attendanceForExport(meetingId: String) = dao.attendanceForExport(meetingId)
     suspend fun markExported(ids: List<String>) {
         if (ids.isNotEmpty()) dao.markExported(ids, Instant.now().toString())
