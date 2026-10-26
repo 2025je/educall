@@ -1,0 +1,78 @@
+name: Server tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "edumeeting-server/**"
+      - "compose.yaml"
+      - ".github/workflows/server-tests.yml"
+  pull_request:
+    paths:
+      - "edumeeting-server/**"
+      - "compose.yaml"
+      - ".github/workflows/server-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: edumeeting
+          POSTGRES_USER: edumeeting
+          POSTGRES_PASSWORD: edumeeting-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U edumeeting -d edumeeting"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DJANGO_DEBUG: "1"
+      POSTGRES_DB: edumeeting
+      POSTGRES_USER: edumeeting
+      POSTGRES_PASSWORD: edumeeting-ci
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      EDUMEETING_TEST_LIVE_SERVICES: "1"
+    defaults:
+      run:
+        working-directory: edumeeting-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: edumeeting-server/requirements.txt
+
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements.txt
+
+      - name: Verificar configuración y migraciones
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+
+      - name: Pruebas (incluye Redis y Celery reales)
+        run: python manage.py test --noinput --verbosity 2

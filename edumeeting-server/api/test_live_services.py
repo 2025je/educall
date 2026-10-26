@@ -33,7 +33,10 @@ from config.celery import app
 class LiveServicesTests(TransactionTestCase):
     def setUp(self):
         self.root = get_user_model().objects.create_superuser("live-test-root", password=None)
-        self.meeting = Meeting.objects.create(number=1, name="Servicios reales", starts_at=timezone.now(), administrator=self.root)
+        self.meeting = Meeting.objects.create(
+            number=1, name="Servicios reales", starts_at=timezone.now(), administrator=self.root,
+            attendance_pin_hash="pbkdf2_sha256$1$salt$Ha5h",
+        )
 
     def test_redis_delivers_committed_event_to_websocket(self):
         async def scenario():
