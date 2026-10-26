@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Asistencia offline · {{ meeting.name }}{% endblock %}
 {% block head %}<script src="{% static 'attendance/export_packages.js' %}" defer></script>{% endblock %}
-{% block nav_meetings %} md-nav__link--active{% endblock %}
+{% block nav_offline %}{% if active_meeting.pk == meeting.pk %} md-nav__link--active{% endif %}{% endblock %}
 {% block tab_meetings %} md-tabs__link--active{% endblock %}
 {% block breadcrumbs %} <span>›</span> <a href="{% url 'meeting-management' %}">Gestionar reuniones</a> <span>›</span> <span>Asistencia offline</span>{% endblock %}
 {% block toc %}<li><a class="md-nav__link" href="#exportar">Exportar paquete</a></li><li><a class="md-nav__link" href="#importar">Importar resultados</a></li><li><a class="md-nav__link" href="#conflictos">Conflictos</a></li>{% endblock %}
